@@ -8,6 +8,7 @@ Download multiple games from [vimm.net](https://vimm.net) at the same time, bypa
 - **IP rotation backends**:
   - **Tor** (free) -- automatically rotates Tor exit nodes for each download
   - **Proxy list** -- rotates through a pool of HTTP/SOCKS proxies
+- **Auto-start Tor** -- automatically starts the Tor daemon when needed (and installs it if missing)
 - **Search** -- search the vault by console and query directly from the CLI
 - **GUI mode** -- desktop interface with search, download queue, format selector, and settings management
 - **Format selector** -- choose the saved file extension: auto, iso, wbfs, rvz, zip, or 7z
@@ -28,34 +29,25 @@ Since vimm.net limits one download per IP address, using a different IP for each
 - Python 3.10+
 - `pip install -r requirements.txt`
 
-### Tor mode (default)
+### Tor mode (default) -- auto-managed
 
-Install and run Tor on your system:
+Tor is automatically started when you run a download with `--mode tor` (the default).
+If Tor is not installed, the tool prompts you to install it (CLI mode) or auto-installs
+it via your system package manager (GUI mode).
 
-```bash
-# macOS
-brew install tor
+Supported package managers:
+- macOS: `brew install tor`
+- Debian/Ubuntu: `apt-get install -y tor`
+- Fedora: `dnf install -y tor`
+- Arch: `pacman -S --noconfirm tor`
+- openSUSE: `zypper install -y tor`
 
-# Ubuntu / Debian
-sudo apt install tor
-```
+The tool generates a temporary `torrc` configuration with proper SOCKS and Control
+ports, and cleans up the Tor process on exit. No manual setup needed.
 
-Ensure your `torrc` has ControlPort enabled:
-
-```
-ControlPort 9051
-CookieAuthentication 1
-```
-
-Then start Tor:
-
-```bash
-# macOS
-brew services start tor
-
-# Linux
-sudo systemctl start tor
-```
+To use an existing Tor daemon instead (e.g., running via `brew services` or `systemctl`),
+simply make sure it is running before launching the tool. The auto-start logic detects
+an already-running Tor and skips startup.
 
 ### Proxy mode
 
@@ -67,9 +59,40 @@ Note: vimm.net may block datacenter IPs. Residential or SOCKS5 proxies work best
 
 ## Installation
 
+### Run from the project directory (no install):
+
 ```bash
+cd /path/to/parent  # must be the PARENT of vimm_bulk_downloader/
+                   # (python -m vimm_bulk_downloader finds the package by folder name)
+python3 -m pip install -r vimm_bulk_downloader/requirements.txt
 cd vimm_bulk_downloader
 pip install -r requirements.txt
+```
+
+**Important:** `python -m vimm_bulk_downloader` must be run from the **parent directory**
+of the project folder, not from inside it. If you are inside `vimm_bulk_downloader/`,
+python looks for `vimm_bulk_downloader/vimm_bulk_downloader/` which does not exist.
+
+```bash
+# Correct -- run from parent directory
+cd /path/to/parent/
+python -m vimm_bulk_downloader gui
+
+# Wrong -- this will fail with "No module named vimm_bulk_downloader"
+cd /path/to/parent/vimm_bulk_downloader/
+python -m vimm_bulk_downloader gui
+```
+
+### Install as a package (works from anywhere):
+
+```bash
+cd /path/to/vimm_bulk_downloader
+python3 -m pip install -e . --break-system-packages  # macOS with system Python
+pip install -e .                                      # other systems
+
+# Now works from any directory:
+vimm-downloader gui
+python -m vimm_bulk_downloader gui
 ```
 
 ## Usage
@@ -131,13 +154,20 @@ python -m vimm_bulk_downloader consoles
 ### Launch the GUI
 
 ```bash
+cd /path/to/parent/  # or install with pip -e . first
 python -m vimm_bulk_downloader gui
+```
+
+Or if you installed the package:
+
+```bash
+vimm-downloader gui
 ```
 
 The GUI provides three tabs:
 - **Search** -- search the vault, browse results, and add games to the download queue
 - **Downloads** -- manage the download queue with real-time progress bars and a format selector (auto/iso/wbfs/rvz/zip/7z) for the saved file extension
-- **Settings** -- configure IP rotation, output directory, and concurrency (up to 40 workers)
+- **Settings** -- configure IP rotation (Tor auto-start/install, proxy list), output directory, and concurrency (up to 40 workers)
 
 ### Backward-compatible usage
 
@@ -183,6 +213,9 @@ GUI subcommand:
 - Tor adds additional latency. For better speed, use a proxy pool with `--mode proxy`.
 - To run 40 concurrent downloads, you need 40 different proxies in your pool. Tor mode is limited to 1 worker because the NEWNYM signal changes the circuit globally.
 - The tool automatically rewrites `download2.vimm.net` to `download.vimm.net` (unless `--no-primary` is passed), which the community has found more reliable.
+- Tor is auto-started on demand and stopped when the program exits. No need to manage it manually.
+- When using the GUI with Tor mode, clicking "Test Tor" in Settings or starting a download will automatically install Tor (if missing) and start it.
+- temporary files (torrc, data directory, logs) are cleaned up when the tool exits.
 - Be respectful of vimm.net's limited server resources. This tool is designed for convenience, not mass scraping.
 
 ## Project structure
@@ -194,10 +227,12 @@ vimm_bulk_downloader/
   cli.py                  Command-line interface with subcommands
   console_list.py         Console name-to-code mappings
   downloader.py           Concurrent download orchestrator with Rich progress
-  gui.py                  tkinter desktop GUI
+  gui.py                  tkinter desktop GUI (search, queue, progress, settings)
   ip_rotator.py           IP rotation backends (Tor, proxy list)
+  tor_manager.py          Tor daemon lifecycle (detect, install, start, stop)
   vimm_scraper.py         Scrapes vault pages for download URLs
   vimm_search.py          Search engine with Rich table output
+  pyproject.toml          Build config for pip-installable package
   README.md
   requirements.txt
   .gitignore
