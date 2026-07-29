@@ -110,6 +110,13 @@ def _add_shared_download_args(parser):
         help="Skip proxy health-checking (faster startup, may use dead proxies)",
     )
     parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        dest="dry_run",
+        default=False,
+        help="Fetch & check proxies / Tor, validate URLs, then exit without downloading",
+    )
+    parser.add_argument(
         "--no-primary",
         action="store_true",
         dest="no_primary",
@@ -262,6 +269,10 @@ def _run_download(args: dict):
         rotator = _ensure_rotator(args)
         print(f"  IP rotator: {rotator.name()}")
 
+        if args.get("dry_run"):
+            _print_dry_run_summary(args, valid_urls, invalid_urls, rotator)
+            return
+
         download_all(
             vault_urls=valid_urls,
             rotator=rotator,
@@ -270,12 +281,68 @@ def _run_download(args: dict):
             prefer_primary=not args["no_primary"],
         )
     finally:
-        stop_managed_tor()
+        if not args.get("dry_run"):
+            stop_managed_tor()
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def _print_dry_run_summary(args: dict, valid: list, invalid: list, rotator):
+    """Print a summary of what would be downloaded, then exit."""
+    from rich.console import Console
+    from rich.table import Table
+    from .ip_rotator import ProxyRotator
+
+    console = Console()
+    console.print()
+    console.rule("[bold yellow]== Dry Run — No files will be downloaded[/]")
+    console.print()
+
+    table = Table(box=None, padding=(0, 2))
+    table.add_column("Item", style="bold", no_wrap=True)
+    table.add_column("Value")
+
+    table.add_row("Mode", f"[cyan]{args['mode']}[/]")
+    table.add_row("Valid URLs", f"[green]{len(valid)}[/]")
+    table.add_row("Invalid URLs", f"[red]{len(invalid)}[/]" if invalid else "[green]0[/]")
+    table.add_row("IP rotator", f"[cyan]{rotator.name()}[/]")
+
+    if isinstance(rotator, ProxyRotator):
+        table.add_row(
+            "Working proxies",
+            f"[green]{len(rotator._proxies)}[/]"
+        )
+
+    table.add_row("Output directory", f"[yellow]{os.path.abspath(args['output'])}[/]")
+    table.add_row("Workers", str(args["workers"]))
+
+    if args["mode"] == "proxy":
+        proxy_source = "Proxifly CDN (default)" if args.get("proxy_list") == "default" else (
+            args.get("proxy_file") or "inline list"
+        )
+        table.add_row("Proxy source", proxy_source)
+        table.add_row(
+            "Health check",
+            "[green]enabled[/]" if args.get("proxy_check", True) else "[yellow]disabled[/]",
+        )
+
+    if valid:
+        console.print("[bold]Vault URLs:[/]")
+        for u in valid[:20]:
+            console.print(f"  [dim]{u}[/]")
+        if len(valid) > 20:
+            console.print(f"  [dim]... and {len(valid) - 20} more[/]")
+    console.print()
+    console.print(table)
+    console.print()
+    console.print(
+        "[bold yellow]Dry run complete.[/] "
+        "Remove [cyan]--dry-run[/] to actually download."
+    )
+    console.print()
+
 
 def _read_urls_from_file(path: str) -> list[str]:
     p = Path(path)
