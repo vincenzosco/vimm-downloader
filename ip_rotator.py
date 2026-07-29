@@ -99,19 +99,35 @@ class TorRotator(IPRotator):
             )
             time.sleep(wait)
 
-        try:
-            with Controller.from_port(port=self.control_port) as controller:
-                if self.control_password:
-                    controller.authenticate(password=self.control_password)
-                else:
-                    controller.authenticate()  # cookie auth
-                controller.signal(Signal.NEWNYM)
-                self._last_rotate = time.time()
-                logger.info("Tor circuit renewed — new exit-node IP assigned.")
-                return True
-        except Exception as exc:
-            logger.error("Tor NEWNYM failed: %s", exc)
-            return False
+        # Retry up to 2 times with auto-fix in between
+        for attempt in range(2):
+            try:
+                with Controller.from_port(port=self.control_port) as controller:
+                    if self.control_password:
+                        controller.authenticate(password=self.control_password)
+                    else:
+                        controller.authenticate()  # cookie auth
+                    controller.signal(Signal.NEWNYM)
+                    self._last_rotate = time.time()
+                    logger.info("Tor circuit renewed — new exit-node IP assigned.")
+                    return True
+            except Exception as exc:
+                err_msg = str(exc)
+                # Check if this is a cookie permission issue
+                if attempt == 0 and "Permission denied" in err_msg and "authcookie" in err_msg:
+                    logger.warning("Tor cookie not readable — attempting auto-fix...")
+                    try:
+                        from .tor_manager import fix_tor_cookie_auth
+                        if fix_tor_cookie_auth():
+                            logger.info("Cookie fixed, retrying rotation...")
+                            continue
+                    except Exception:
+                        pass
+                # Not a cookie issue, or fix failed — report once
+                logger.error("Tor NEWNYM failed: %s", exc)
+                return False
+
+        return False
 
 
 # ---------------------------------------------------------------------------

@@ -30,7 +30,7 @@ from colorama import Fore, Style, init as colorama_init
 from . import __version__
 from .downloader import download_all, DEFAULT_MAX_WORKERS, DEFAULT_OUTPUT_DIR
 from .ip_rotator import create_rotator, detect_tor, ensure_tor_running
-from .tor_manager import stop_managed_tor, control_port_reachable, enable_control_port
+from .tor_manager import stop_managed_tor, control_port_reachable, enable_control_port_and_fix_cookie
 from .vimm_scraper import validate_vault_url
 from .console_list import CONSOLE_TABLE
 from .vimm_search import search_vimm, render_results
@@ -139,7 +139,7 @@ def _check_tor(args: dict):
             ).strip().lower()
             if ans != "n":
                 print(f"  {Fore.CYAN}Enabling ControlPort :{ctrl_port}...{Style.RESET_ALL}")
-                ok = enable_control_port(port=ctrl_port, socks_port=args["tor_socks_port"])
+                ok = enable_control_port_and_fix_cookie(port=ctrl_port, socks_port=args["tor_socks_port"])
                 if ok:
                     print(f"  {Fore.GREEN}OK ControlPort enabled! Tor is ready.{Style.RESET_ALL}")
                 else:

@@ -41,7 +41,7 @@ from .ip_rotator import (
     IPRotator,
     TorRotator,
 )
-from .tor_manager import TorManager, stop_managed_tor, control_port_reachable, enable_control_port
+from .tor_manager import TorManager, stop_managed_tor, control_port_reachable, enable_control_port_and_fix_cookie
 from .console_list import CONSOLE_TABLE
 from .downloader import _format_size
 
@@ -792,7 +792,7 @@ class VimmBulkGUI:
                     )
                     if do_enable:
                         def _enable_thread():
-                            ok = enable_control_port(
+                            ok = enable_control_port_and_fix_cookie(
                                 port=ctrl_port,
                                 socks_port=self.config["tor_socks_port"],
                             )
@@ -1148,7 +1148,7 @@ class VimmBulkGUI:
                         )
                         if do_enable:
                             def _run_enable():
-                                ok = enable_control_port(
+                                ok = enable_control_port_and_fix_cookie(
                                     port=ctrl_port,
                                     socks_port=socks_port,
                                 )

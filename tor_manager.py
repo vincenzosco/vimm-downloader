@@ -388,6 +388,78 @@ def _tor_restart_command() -> list[str]:
     return ["sudo", "systemctl", "restart", "tor"]
 
 
+# ---------------------------------------------------------------------------
+# Fix cookie authentication permissions
+# ---------------------------------------------------------------------------
+
+COOKIE_CANDIDATES = [
+    "/run/tor/control.authcookie",
+    "/var/lib/tor/control.authcookie",
+    "/var/run/tor/control.authcookie",
+    "/tmp/tor/control.authcookie",
+    os.path.expanduser("~/.tor/control.authcookie"),
+]
+
+
+def _find_cookie_file() -> Optional[str]:
+    """Return path to the Tor control auth cookie, or None."""
+    for path in COOKIE_CANDIDATES:
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+def _is_cookie_readable() -> bool:
+    """Check if the Tor control auth cookie can be read by us."""
+    path = _find_cookie_file()
+    if path is None:
+        return True  # no cookie file -> no permission issue
+    return os.access(path, os.R_OK)
+
+
+def fix_tor_cookie_auth() -> bool:
+    """Make the Tor control auth cookie readable by the current user.
+
+    On Linux, Tor runs as user ``debian-tor`` and creates the cookie
+    file with ``0600`` permissions, so regular users can't read it.
+    This function runs ``sudo chmod o+r <cookie_path>`` to make it
+    world-readable (safe enough since it only affects the local machine).
+
+    Returns True once the cookie file is readable.
+    """
+    if _is_cookie_readable():
+        return True
+
+    cookie_path = _find_cookie_file()
+    if cookie_path is None:
+        logger.error("Could not find Tor control auth cookie to fix.")
+        return False
+
+    logger.info("Tor cookie file %s is not readable — fixing with sudo chmod", cookie_path)
+
+    try:
+        proc = subprocess.run(
+            ["sudo", "chmod", "o+r", cookie_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if proc.returncode != 0:
+            logger.error("Failed to fix cookie permissions: %s", proc.stderr.strip())
+            return False
+    except Exception as exc:
+        logger.error("Error fixing cookie permissions: %s", exc)
+        return False
+
+    # Verify fix
+    if _is_cookie_readable():
+        logger.info("Tor cookie permissions fixed successfully.")
+        return True
+
+    logger.error("Cookie permissions still not fixed after chmod.")
+    return False
+
+
 def enable_control_port(
     port: int = DEFAULT_CONTROL_PORT,
     socks_port: int = DEFAULT_SOCKS_PORT,
@@ -417,12 +489,17 @@ def enable_control_port(
     # Check if ControlPort is already configured
     has_control = any(
         line.strip() and not line.strip().startswith("#")
-        and ("ControlPort" in line or "ControlPort" in line)
+        and "ControlPort" in line
         for line in lines
     )
     has_cookie = any(
         line.strip() and not line.strip().startswith("#")
         and "CookieAuthentication" in line
+        for line in lines
+    )
+    has_group_readable = any(
+        line.strip() and not line.strip().startswith("#")
+        and "CookieAuthFileGroupReadable" in line
         for line in lines
     )
 
@@ -439,11 +516,14 @@ def enable_control_port(
         new_lines.append(f"ControlPort {port}\n")
     if not has_cookie:
         new_lines.append("CookieAuthentication 1\n")
+    if not has_group_readable:
+        new_lines.append("CookieAuthFileGroupReadable 1\n")
 
     if not new_lines:
         # Both exist but port still not reachable — need to change port
         new_lines.append(f"ControlPort {port}\n")
         new_lines.append("CookieAuthentication 1\n")
+        new_lines.append("CookieAuthFileGroupReadable 1\n")
 
     # Write using sudo tee (or direct append if writable)
     try:
@@ -491,3 +571,20 @@ def enable_control_port(
 
     logger.error("ControlPort :%d did not become reachable after restart.", port)
     return False
+
+
+def enable_control_port_and_fix_cookie(
+    port: int = DEFAULT_CONTROL_PORT,
+    socks_port: int = DEFAULT_SOCKS_PORT,
+) -> bool:
+    """Enable ControlPort in torrc, restart Tor, then fix cookie permissions.
+
+    Combines ``enable_control_port`` (persistent torrc change) with
+    ``fix_tor_cookie_auth`` (immediate ``sudo chmod o+r``) so that the
+    current user can authenticate with the control port right away.
+    """
+    ok = enable_control_port(port=port, socks_port=socks_port)
+    if not ok:
+        return False
+    fix_tor_cookie_auth()
+    return True
