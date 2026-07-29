@@ -80,6 +80,7 @@ def load_config() -> dict:
         "tor_socks_port": 9050,
         "tor_control_port": 9051,
         "proxy_file": "",
+        "proxy_use_default": False,
         "output_dir": str(Path.cwd() / "downloads"),
         "workers": 3,
         "download_format": "auto",
@@ -809,9 +810,14 @@ class VimmBulkGUI:
 
         # Phase 3: Download with IP rotation
         try:
+            # Determine proxy list: "default" if checkbox is checked
+            proxy_list_arg = "default" if self.config.get("proxy_use_default") else None
+            proxy_file_arg = self.config.get("proxy_file") or None
+
             rotator = create_rotator(
                 mode=self.config["mode"],
-                proxy_file=self.config.get("proxy_file") or None,
+                proxy_file=proxy_file_arg,
+                proxy_list=proxy_list_arg,
                 tor_socks_port=self.config["tor_socks_port"],
                 tor_control_port=self.config["tor_control_port"],
             )
@@ -1042,13 +1048,31 @@ class VimmBulkGUI:
         self.proxy_frame = ttk.Frame(mode_frame)
         self.proxy_frame.pack(fill="x", pady=(8, 0))
 
-        ttk.Label(self.proxy_frame, text="Proxy file:",
+        # Default proxy pool checkbox
+        self.proxy_default_var = tk.BooleanVar(value=self.config.get("proxy_use_default", False))
+        self.proxy_default_cb = ttk.Checkbutton(
+            self.proxy_frame,
+            text="Use default free proxy pool (Proxifly CDN — SOCKS5, updated every 5 min)",
+            variable=self.proxy_default_var,
+            command=self._toggle_proxy_source,
+        )
+        self.proxy_default_cb.pack(anchor="w", pady=(0, 4))
+
+        proxy_file_row = ttk.Frame(self.proxy_frame)
+        proxy_file_row.pack(fill="x")
+
+        ttk.Label(proxy_file_row, text="Proxy file (optional):",
                   font=("Segoe UI", 9), foreground=TEXT_SECONDARY).pack(side="left")
         self.proxy_path_var = tk.StringVar(value=self.config.get("proxy_file", ""))
-        ttk.Entry(self.proxy_frame, textvariable=self.proxy_path_var,
-                  width=40).pack(side="left", padx=(4, 6))
-        ttk.Button(self.proxy_frame, text="Browse...",
-                    command=self._browse_proxy).pack(side="left")
+        self.proxy_path_entry = ttk.Entry(proxy_file_row, textvariable=self.proxy_path_var,
+                                          width=40)
+        self.proxy_path_entry.pack(side="left", padx=(4, 6))
+        self.proxy_browse_btn = ttk.Button(proxy_file_row, text="Browse...",
+                                            command=self._browse_proxy)
+        self.proxy_browse_btn.pack(side="left")
+
+        # Apply initial proxy source toggle
+        self._toggle_proxy_source()
 
         # --- Output ---
         out_frame = ttk.LabelFrame(tab, text="Output", padding=12)
@@ -1105,11 +1129,22 @@ class VimmBulkGUI:
                 except tk.TclError:
                     pass
         for w in self.proxy_frame.winfo_children():
-            if isinstance(w, (ttk.Entry, ttk.Button)):
+            if isinstance(w, (ttk.Entry, ttk.Button, ttk.Checkbutton)):
                 try:
                     w.configure(state="disabled" if is_tor else "normal")
                 except tk.TclError:
                     pass
+        self._toggle_proxy_source()
+
+    def _toggle_proxy_source(self):
+        """Enable/disable the proxy file path entry based on checkbox."""
+        use_default = self.proxy_default_var.get()
+        state = "disabled" if use_default else "normal"
+        try:
+            self.proxy_path_entry.configure(state=state)
+            self.proxy_browse_btn.configure(state=state)
+        except tk.TclError:
+            pass
 
     def _browse_proxy(self):
         path = filedialog.askopenfilename(
@@ -1197,6 +1232,7 @@ class VimmBulkGUI:
             self.config["tor_socks_port"] = int(self.tor_socks_var.get())
             self.config["tor_control_port"] = int(self.tor_ctrl_var.get())
             self.config["proxy_file"] = self.proxy_path_var.get()
+            self.config["proxy_use_default"] = self.proxy_default_var.get()
             self.config["output_dir"] = self.output_dir_var.get()
             self.config["workers"] = int(self.workers_var.get())
             self.config["download_format"] = self.format_var.get()

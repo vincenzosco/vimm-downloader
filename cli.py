@@ -58,7 +58,7 @@ def setup_logging(verbose: bool = False):
 
 
 def _add_shared_download_args(parser):
-    """Add --mode, --proxy-file, --tor-*, --output, --workers, --no-primary."""
+    """Add --mode, --proxy-file, --proxy-list, --tor-*, --output, --workers, --no-primary."""
     parser.add_argument(
         "--mode", "-m",
         choices=["tor", "proxy"],
@@ -69,6 +69,15 @@ def _add_shared_download_args(parser):
         "--proxy-file", "-p",
         metavar="FILE",
         help="Path to proxy list file (mode=proxy)",
+    )
+    parser.add_argument(
+        "--proxy-list",
+        metavar="SOURCE",
+        nargs="?",
+        const="default",
+        default=None,
+        help="Proxy source: 'default' to fetch free proxies from Proxifly CDN, "
+             "or a comma-separated list of proxy URLs (mode=proxy)",
     )
     parser.add_argument(
         "--tor-socks-port", type=int, default=9050,
@@ -104,13 +113,30 @@ def _add_shared_download_args(parser):
 def _ensure_rotator(args: dict):
     """Build and return an IPRotator from parsed args.  Exits on error."""
     try:
+        # Resolve --proxy-list: "default" or comma-separated list
+        proxy_list_val = args.get("proxy_list")
+        if proxy_list_val and proxy_list_val != "default":
+            # Treat as comma-separated list of proxy URLs
+            proxy_list = [p.strip() for p in proxy_list_val.split(",") if p.strip()]
+        elif proxy_list_val == "default":
+            proxy_list = "default"
+        else:
+            proxy_list = None
+
         rotator = create_rotator(
             mode=args["mode"],
             proxy_file=args.get("proxy_file"),
+            proxy_list=proxy_list,
             tor_socks_port=args["tor_socks_port"],
             tor_control_port=args["tor_control_port"],
             tor_password=args.get("tor_password"),
         )
+
+        if proxy_list_val == "default":
+            print(f"  {Fore.GREEN}OK Fetched fresh proxies from Proxifly CDN{Style.RESET_ALL}")
+        elif proxy_list_val and proxy_list_val != "default":
+            print(f"  {Fore.GREEN}OK {rotator.name()}{Style.RESET_ALL}")
+
     except (ValueError, FileNotFoundError) as e:
         print(f"{Fore.RED}Error: {e}{Style.RESET_ALL}")
         sys.exit(1)

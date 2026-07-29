@@ -23,6 +23,22 @@ logger = logging.getLogger(__name__)
 # Suppress stem's noisy INFO-level socket-closed messages
 logging.getLogger("stem").setLevel(logging.WARNING)
 
+# ---------------------------------------------------------------------------
+# Proxifly free-proxy-list CDN URLs (updated every 5 minutes)
+# Format: ip:port per line
+# Source: https://github.com/proxifly/free-proxy-list
+# ---------------------------------------------------------------------------
+
+PROXIFLY_CDN_BASE = "https://cdn.jsdelivr.net/gh/proxifly/free-proxy-list@main/proxies"
+
+PROXIFLY_URLS = {
+    "all":    f"{PROXIFLY_CDN_BASE}/all/data.txt",
+    "socks5": f"{PROXIFLY_CDN_BASE}/protocols/socks5/data.txt",
+    "socks4": f"{PROXIFLY_CDN_BASE}/protocols/socks4/data.txt",
+    "http":   f"{PROXIFLY_CDN_BASE}/protocols/http/data.txt",
+    "https":  f"{PROXIFLY_CDN_BASE}/protocols/https/data.txt",
+}
+
 
 # ---------------------------------------------------------------------------
 # Abstract base
@@ -280,13 +296,24 @@ def create_rotator(
             control_password=tor_password,
         )
     elif mode == "proxy":
-        if proxy_list:
+        if isinstance(proxy_list, str) and proxy_list == "default":
+            # Fetch fresh proxies from the Proxifly free-proxy-list CDN
+            logger.info("Fetching fresh proxies from Proxifly free-proxy-list CDN ...")
+            try:
+                return ProxyRotator.from_url(PROXIFLY_URLS["socks5"])
+            except ValueError as e:
+                raise ValueError(
+                    f"Failed to fetch default proxy pool: {e}\n"
+                    "    Fall back to --proxy-file with a custom list."
+                ) from e
+        elif isinstance(proxy_list, list):
             return ProxyRotator(proxy_list=proxy_list)
         elif proxy_file:
             return ProxyRotator.from_file(proxy_file)
         else:
             raise ValueError(
-                "proxy mode requires either --proxy-file or --proxy-list"
+                "proxy mode requires --proxy-list default, "
+                "--proxy-file <file>, or --proxy-list <list>"
             )
     else:
         raise ValueError(f"Unknown rotator mode: {mode}")
