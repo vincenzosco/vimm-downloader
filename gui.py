@@ -81,6 +81,7 @@ def load_config() -> dict:
         "tor_control_port": 9051,
         "proxy_file": "",
         "proxy_use_default": False,
+        "proxy_check": True,
         "output_dir": str(Path.cwd() / "downloads"),
         "workers": 3,
         "download_format": "auto",
@@ -818,6 +819,7 @@ class VimmBulkGUI:
                 mode=self.config["mode"],
                 proxy_file=proxy_file_arg,
                 proxy_list=proxy_list_arg,
+                proxy_check=self.config.get("proxy_check", True),
                 tor_socks_port=self.config["tor_socks_port"],
                 tor_control_port=self.config["tor_control_port"],
             )
@@ -1058,6 +1060,15 @@ class VimmBulkGUI:
         )
         self.proxy_default_cb.pack(anchor="w", pady=(0, 4))
 
+        # Health check checkbox
+        self.proxy_check_var = tk.BooleanVar(value=self.config.get("proxy_check", True))
+        self.proxy_check_cb = ttk.Checkbutton(
+            self.proxy_frame,
+            text="Health-check proxies before use (slower startup, but filters dead ones)",
+            variable=self.proxy_check_var,
+        )
+        self.proxy_check_cb.pack(anchor="w", pady=(0, 4))
+
         proxy_file_row = ttk.Frame(self.proxy_frame)
         proxy_file_row.pack(fill="x")
 
@@ -1137,7 +1148,7 @@ class VimmBulkGUI:
         self._toggle_proxy_source()
 
     def _toggle_proxy_source(self):
-        """Enable/disable the proxy file path entry based on checkbox."""
+        """Enable/disable proxy settings based on mode and default pool checkbox."""
         use_default = self.proxy_default_var.get()
         state = "disabled" if use_default else "normal"
         try:
@@ -1233,6 +1244,7 @@ class VimmBulkGUI:
             self.config["tor_control_port"] = int(self.tor_ctrl_var.get())
             self.config["proxy_file"] = self.proxy_path_var.get()
             self.config["proxy_use_default"] = self.proxy_default_var.get()
+            self.config["proxy_check"] = self.proxy_check_var.get()
             self.config["output_dir"] = self.output_dir_var.get()
             self.config["workers"] = int(self.workers_var.get())
             self.config["download_format"] = self.format_var.get()

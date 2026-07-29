@@ -103,6 +103,13 @@ def _add_shared_download_args(parser):
         help=f"Max concurrent downloads (default: {DEFAULT_MAX_WORKERS})",
     )
     parser.add_argument(
+        "--no-proxy-check",
+        action="store_false",
+        dest="proxy_check",
+        default=True,
+        help="Skip proxy health-checking (faster startup, may use dead proxies)",
+    )
+    parser.add_argument(
         "--no-primary",
         action="store_true",
         dest="no_primary",
@@ -127,6 +134,7 @@ def _ensure_rotator(args: dict):
             mode=args["mode"],
             proxy_file=args.get("proxy_file"),
             proxy_list=proxy_list,
+            proxy_check=args.get("proxy_check", True),
             tor_socks_port=args["tor_socks_port"],
             tor_control_port=args["tor_control_port"],
             tor_password=args.get("tor_password"),
