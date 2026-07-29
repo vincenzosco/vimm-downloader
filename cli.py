@@ -29,7 +29,8 @@ from colorama import Fore, Style, init as colorama_init
 
 from . import __version__
 from .downloader import download_all, DEFAULT_MAX_WORKERS, DEFAULT_OUTPUT_DIR
-from .ip_rotator import create_rotator, detect_tor
+from .ip_rotator import create_rotator, detect_tor, ensure_tor_running
+from .tor_manager import stop_managed_tor
 from .vimm_scraper import validate_vault_url
 from .console_list import CONSOLE_TABLE
 from .vimm_search import search_vimm, render_results
@@ -117,20 +118,25 @@ def _ensure_rotator(args: dict):
 
 
 def _check_tor(args: dict):
-    """If mode=tor, test connectivity and optionally prompt to continue."""
+    """If mode=tor, auto-install and start Tor if needed."""
     if args["mode"] != "tor":
         return
-    print(f"{Fore.CYAN}Checking Tor connectivity ...{Style.RESET_ALL}")
+
+    print(f"{Fore.CYAN}Checking Tor ...{Style.RESET_ALL}")
     if detect_tor():
-        print(f"  {Fore.GREEN}✓ Tor detected{Style.RESET_ALL}")
+        print(f"  {Fore.GREEN}✓ Tor already running{Style.RESET_ALL}")
+        return
+
+    print(f"  {Fore.YELLOW}Tor not running — attempting to start it ...{Style.RESET_ALL}")
+    ok = ensure_tor_running(
+        socks_port=args["tor_socks_port"],
+        control_port=args["tor_control_port"],
+        interactive_install=True,
+    )
+    if ok:
+        print(f"  {Fore.GREEN}✓ Tor is ready{Style.RESET_ALL}")
     else:
-        print(
-            f"  {Fore.YELLOW}⚠ Tor not detected on localhost:9050.{Style.RESET_ALL}\n"
-            f"    Make sure the Tor daemon is running with:\n"
-            f"      • SOCKS5 on port {args['tor_socks_port']}\n"
-            f"      • ControlPort on {args['tor_control_port']}\n"
-            f"    Install: brew install tor  or  apt install tor"
-        )
+        print(f"  {Fore.RED}✗ Could not start Tor.  Check your setup.{Style.RESET_ALL}")
         proceed = input("    Continue anyway? [Y/n]: ").strip().lower()
         if proceed == "n":
             sys.exit(1)
@@ -194,17 +200,20 @@ def _run_download(args: dict):
     _print_banner()
     print(f"\n{Fore.WHITE}Games to download:{Style.RESET_ALL} {len(valid_urls)}")
 
-    _check_tor(args)
-    rotator = _ensure_rotator(args)
-    print(f"  IP rotator: {rotator.name()}")
+    try:
+        _check_tor(args)
+        rotator = _ensure_rotator(args)
+        print(f"  IP rotator: {rotator.name()}")
 
-    download_all(
-        vault_urls=valid_urls,
-        rotator=rotator,
-        output_dir=args["output"],
-        max_workers=args["workers"],
-        prefer_primary=not args["no_primary"],
-    )
+        download_all(
+            vault_urls=valid_urls,
+            rotator=rotator,
+            output_dir=args["output"],
+            max_workers=args["workers"],
+            prefer_primary=not args["no_primary"],
+        )
+    finally:
+        stop_managed_tor()
 
 
 # ---------------------------------------------------------------------------

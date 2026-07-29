@@ -16,6 +16,8 @@ from typing import Optional
 
 import requests
 
+from .tor_manager import TorManager
+
 logger = logging.getLogger(__name__)
 
 
@@ -213,6 +215,22 @@ def detect_tor() -> bool:
         return "Congratulations" in resp.text
     except Exception:
         return False
+
+
+def ensure_tor_running(
+    socks_port: int = 9050,
+    control_port: int = 9051,
+    interactive_install: bool = True,
+) -> bool:
+    """Convenience: install Tor if needed, start it, and wait until ready.
+
+    Returns True once Tor is running and accepting connections.
+    """
+    mgr = TorManager(
+        socks_port=socks_port,
+        control_port=control_port,
+    )
+    return mgr.ensure_running(interactive_install=interactive_install)
 
 
 def create_rotator(

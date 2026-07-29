@@ -37,9 +37,11 @@ from .vimm_search import search_vimm
 from .ip_rotator import (
     create_rotator,
     detect_tor,
+    ensure_tor_running,
     IPRotator,
     TorRotator,
 )
+from .tor_manager import TorManager, stop_managed_tor
 from .console_list import CONSOLE_TABLE
 from .downloader import _format_size
 
@@ -761,7 +763,21 @@ class VimmBulkGUI:
 
         session.close()
 
-        # Phase 2: Download with IP rotation
+        # Phase 2: Ensure Tor is running if needed
+        if self.config["mode"] == "tor":
+            ok = ensure_tor_running(
+                socks_port=self.config["tor_socks_port"],
+                control_port=self.config["tor_control_port"],
+                interactive_install=False,
+            )
+            if not ok:
+                def _on_tor_auto_fail():
+                    self.dl_status["text"] = "❌ Tor failed to start. Check Settings tab."
+                    self.start_all_btn["state"] = "normal"
+                self.root.after(0, _on_tor_auto_fail)
+                return
+
+        # Phase 3: Download with IP rotation
         try:
             rotator = create_rotator(
                 mode=self.config["mode"],
@@ -1068,18 +1084,26 @@ class VimmBulkGUI:
             self.output_dir_var.set(path)
 
     def _test_tor(self):
-        """Test Tor connectivity."""
+        """Test Tor connectivity.  Auto-start / install if needed."""
         self.tor_check_btn["state"] = "disabled"
-        self.tor_check_btn["text"] = "⏳ Testing..."
+        self.tor_check_btn["text"] = "⏳ Setting up Tor..."
+        self.settings_status["text"] = "Checking Tor..."
 
         def test():
             socks_port = int(self.tor_socks_var.get())
             ctrl_port = int(self.tor_ctrl_var.get())
-            try:
-                result = detect_tor()
-                self.root.after(0, lambda: self._on_tor_test(result))
-            except Exception as e:
-                self.root.after(0, lambda: self._on_tor_test_error(str(e)))
+
+            if detect_tor():
+                self.root.after(0, lambda: self._on_tor_test(True))
+                return
+
+            # Try to install & start Tor automatically
+            result = ensure_tor_running(
+                socks_port=socks_port,
+                control_port=ctrl_port,
+                interactive_install=False,
+            )
+            self.root.after(0, lambda: self._on_tor_test(result))
 
         threading.Thread(target=test, daemon=True).start()
 
@@ -1090,8 +1114,11 @@ class VimmBulkGUI:
             self.settings_status["text"] = "Tor detected and working."
             self.settings_status["foreground"] = SUCCESS
         else:
-            self.tor_check_btn["text"] = "❌ Tor not detected"
-            self.settings_status["text"] = "Tor not reachable. Is the daemon running?"
+            self.tor_check_btn["text"] = "❌ Tor not available"
+            self.settings_status["text"] = (
+                "Tor not reachable.  Install it manually:\n"
+                "  brew install tor"
+            )
             self.settings_status["foreground"] = ERROR
 
     def _on_tor_test_error(self, error: str):
@@ -1132,8 +1159,11 @@ class VimmBulkGUI:
     # =======================================================================
 
     def _on_close(self):
-        """Save window geometry and exit."""
+        """Save window geometry, stop Tor if we started it, and exit."""
         self._stop_flag = True
+        # Wait briefly for downloads to stop
+        time.sleep(0.3)
+        stop_managed_tor()
         try:
             self.config["window_geometry"] = self.root.geometry()
             save_config(self.config)
