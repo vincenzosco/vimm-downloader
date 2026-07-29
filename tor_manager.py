@@ -341,3 +341,153 @@ class TorManager:
 
     def __exit__(self, *args):
         self.stop()
+
+
+# ---------------------------------------------------------------------------
+# Enable ControlPort in system torrc
+# ---------------------------------------------------------------------------
+
+def _torrc_path() -> Optional[str]:
+    """Return the path to the system torrc file, or None if not found."""
+    candidates = [
+        "/etc/tor/torrc",
+        "/opt/homebrew/etc/tor/torrc",
+        "/usr/local/etc/tor/torrc",
+        os.path.expanduser("~/.tor/torrc"),
+    ]
+    for p in candidates:
+        if os.path.isfile(p):
+            return p
+    return None
+
+
+def control_port_reachable(port: int = DEFAULT_CONTROL_PORT) -> bool:
+    """Check whether the Tor ControlPort is accessible on localhost."""
+    import socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.settimeout(2)
+    try:
+        result = sock.connect_ex(("127.0.0.1", port))
+        return result == 0
+    finally:
+        sock.close()
+
+
+def _tor_restart_command() -> list[str]:
+    """Return command to restart the Tor service."""
+    if sys.platform == "darwin":
+        # Try brew first, fallback to launchctl
+        if shutil.which("brew"):
+            return ["brew", "services", "restart", "tor"]
+        return ["sudo", "launchctl", "kickstart", "-k", "system/org.torproject.tor"]
+    # Linux: try systemctl, then service
+    if shutil.which("systemctl"):
+        return ["sudo", "systemctl", "restart", "tor"]
+    if shutil.which("service"):
+        return ["sudo", "service", "tor", "restart"]
+    return ["sudo", "systemctl", "restart", "tor"]
+
+
+def enable_control_port(
+    port: int = DEFAULT_CONTROL_PORT,
+    socks_port: int = DEFAULT_SOCKS_PORT,
+) -> bool:
+    """Enable the Tor ControlPort in the system torrc.
+
+    - Finds the torrc file (``/etc/tor/torrc`` on Linux)
+    - Adds or uncomments ``ControlPort`` and ``CookieAuthentication`` lines
+    - Restarts the Tor service
+    - Waits until the ControlPort is reachable
+
+    Returns True once the ControlPort is accessible.
+    """
+    torrc = _torrc_path()
+    if torrc is None:
+        logger.error("Could not find torrc file to edit.")
+        return False
+
+    # Read current content
+    try:
+        with open(torrc, "r") as fh:
+            lines = fh.readlines()
+    except OSError as exc:
+        logger.error("Cannot read %s: %s", torrc, exc)
+        return False
+
+    # Check if ControlPort is already configured
+    has_control = any(
+        line.strip() and not line.strip().startswith("#")
+        and ("ControlPort" in line or "ControlPort" in line)
+        for line in lines
+    )
+    has_cookie = any(
+        line.strip() and not line.strip().startswith("#")
+        and "CookieAuthentication" in line
+        for line in lines
+    )
+
+    # If both already configured (but maybe port is different), still try
+    if has_control and has_cookie:
+        # Already has ControlPort configured
+        if control_port_reachable(port):
+            return True
+        # Maybe the port is different — force-add anyway
+
+    # Build new lines to append
+    new_lines = []
+    if not has_control:
+        new_lines.append(f"ControlPort {port}\n")
+    if not has_cookie:
+        new_lines.append("CookieAuthentication 1\n")
+
+    if not new_lines:
+        # Both exist but port still not reachable — need to change port
+        new_lines.append(f"ControlPort {port}\n")
+        new_lines.append("CookieAuthentication 1\n")
+
+    # Write using sudo tee (or direct append if writable)
+    try:
+        # Try direct write first (unlikely for system file)
+        with open(torrc, "a") as fh:
+            fh.write("\n# Added by vimm-bulk-downloader\n")
+            for line in new_lines:
+                fh.write(line)
+    except OSError:
+        # Need sudo — use tee
+        append_content = "\n# Added by vimm-bulk-downloader\n" + "".join(new_lines)
+        try:
+            proc = subprocess.run(
+                ["sudo", "tee", "-a", torrc],
+                input=append_content,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if proc.returncode != 0:
+                logger.error("Failed to write to torrc: %s", proc.stderr)
+                return False
+        except Exception as exc:
+            logger.error("Cannot modify %s: %s", torrc, exc)
+            return False
+
+    logger.info("Added ControlPort configuration to %s", torrc)
+
+    # Restart Tor
+    restart_cmd = _tor_restart_command()
+    logger.info("Restarting Tor: %s", " ".join(restart_cmd))
+    try:
+        subprocess.run(restart_cmd, capture_output=True, text=True, timeout=30)
+    except Exception as exc:
+        logger.error("Failed to restart Tor: %s", exc)
+        return False
+
+    # Wait for the ControlPort to become reachable
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if control_port_reachable(port):
+            logger.info("ControlPort :%d is now reachable.", port)
+            return True
+        time.sleep(1)
+
+    logger.error("ControlPort :%d did not become reachable after restart.", port)
+    return False

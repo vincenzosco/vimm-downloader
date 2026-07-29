@@ -30,7 +30,7 @@ from colorama import Fore, Style, init as colorama_init
 from . import __version__
 from .downloader import download_all, DEFAULT_MAX_WORKERS, DEFAULT_OUTPUT_DIR
 from .ip_rotator import create_rotator, detect_tor, ensure_tor_running
-from .tor_manager import stop_managed_tor
+from .tor_manager import stop_managed_tor, control_port_reachable, enable_control_port
 from .vimm_scraper import validate_vault_url
 from .console_list import CONSOLE_TABLE
 from .vimm_search import search_vimm, render_results
@@ -128,21 +128,26 @@ def _check_tor(args: dict):
     if detect_tor():
         print(f"  {Fore.GREEN}OK Tor SOCKS proxy reachable{Style.RESET_ALL}")
         # Warn if the control port is not accessible (rotation will fail)
-        import socket
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        try:
-            result = sock.connect_ex(("127.0.0.1", ctrl_port))
-            if result != 0:
-                print(
-                    f"  {Fore.YELLOW}! ControlPort :{ctrl_port} not reachable —"
-                    f" IP rotation will be skipped{Style.RESET_ALL}"
-                )
-                print(
-                    f"    [dim]Add 'ControlPort {ctrl_port}' to your torrc to enable rotation.[/]"
-                )
-        finally:
-            sock.close()
+        if not control_port_reachable(ctrl_port):
+            print(
+                f"  {Fore.YELLOW}! ControlPort :{ctrl_port} not reachable —"
+                f" IP rotation will be skipped{Style.RESET_ALL}"
+            )
+            ans = input(
+                "    Enable ControlPort automatically?"
+                " (requires sudo) [Y/n]: "
+            ).strip().lower()
+            if ans != "n":
+                print(f"  {Fore.CYAN}Enabling ControlPort :{ctrl_port}...{Style.RESET_ALL}")
+                ok = enable_control_port(port=ctrl_port, socks_port=args["tor_socks_port"])
+                if ok:
+                    print(f"  {Fore.GREEN}OK ControlPort enabled! Tor is ready.{Style.RESET_ALL}")
+                else:
+                    print(
+                        f"  {Fore.RED}ERR Could not enable ControlPort.{Style.RESET_ALL}\n"
+                        f"    Automatic download will still work.\n"
+                        f"    To enable manually: add 'ControlPort {ctrl_port}' to /etc/tor/torrc"
+                    )
         return
 
     print(f"  {Fore.YELLOW}Tor not running — attempting to start it ...{Style.RESET_ALL}")

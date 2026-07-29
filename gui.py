@@ -41,7 +41,7 @@ from .ip_rotator import (
     IPRotator,
     TorRotator,
 )
-from .tor_manager import TorManager, stop_managed_tor
+from .tor_manager import TorManager, stop_managed_tor, control_port_reachable, enable_control_port
 from .console_list import CONSOLE_TABLE
 from .downloader import _format_size
 
@@ -764,10 +764,11 @@ class VimmBulkGUI:
         session.close()
 
         # Phase 2: Ensure Tor is running if needed
+        ctrl_port = self.config["tor_control_port"]
         if self.config["mode"] == "tor":
             ok = ensure_tor_running(
                 socks_port=self.config["tor_socks_port"],
-                control_port=self.config["tor_control_port"],
+                control_port=ctrl_port,
                 interactive_install=False,
             )
             if not ok:
@@ -776,6 +777,31 @@ class VimmBulkGUI:
                     self.start_all_btn["state"] = "normal"
                 self.root.after(0, _on_tor_auto_fail)
                 return
+            # Check ControlPort and offer to enable it (on main thread)
+            if not control_port_reachable(ctrl_port):
+                def _prompt_enable():
+                    do_enable = messagebox.askyesno(
+                        "Enable ControlPort?",
+                        "Tor SOCKS is working but the ControlPort is not reachable.\n"
+                        "IP rotation requires the ControlPort to be enabled.\n\n"
+                        "Enable it now? (requires sudo password)",
+                    )
+                    if do_enable:
+                        def _enable_thread():
+                            ok = enable_control_port(
+                                port=ctrl_port,
+                                socks_port=self.config["tor_socks_port"],
+                            )
+                            if ok:
+                                self.root.after(0, lambda: self.dl_status.__setitem__(
+                                    "text", "ControlPort enabled! Tor is ready."
+                                ))
+                            else:
+                                self.root.after(0, lambda: self.dl_status.__setitem__(
+                                    "text", "Could not enable ControlPort. Download will still work."
+                                ))
+                        threading.Thread(target=_enable_thread, daemon=True).start()
+                self.root.after(0, _prompt_enable)
 
         # Phase 3: Download with IP rotation
         try:
@@ -793,9 +819,8 @@ class VimmBulkGUI:
             self.root.after(0, self._on_downloads_complete)
             return
 
+        # Use the user-configured worker count (no limit for Tor mode)
         effective_workers = min(self.config["workers"], len(pending))
-        if isinstance(rotator, TorRotator):
-            effective_workers = 1
 
         with ThreadPoolExecutor(max_workers=effective_workers) as pool:
             futures = []
@@ -1094,6 +1119,27 @@ class VimmBulkGUI:
             ctrl_port = int(self.tor_ctrl_var.get())
 
             if detect_tor():
+                # Check ControlPort and offer to enable it
+                if not control_port_reachable(ctrl_port):
+                    def _prompt_enable():
+                        do_enable = messagebox.askyesno(
+                            "Enable ControlPort?",
+                            "Tor SOCKS is working but the ControlPort is not reachable.\n"
+                            "IP rotation requires the ControlPort to be enabled.\n\n"
+                            "Enable it now? (requires sudo password)",
+                        )
+                        if do_enable:
+                            def _run_enable():
+                                ok = enable_control_port(
+                                    port=ctrl_port,
+                                    socks_port=socks_port,
+                                )
+                                self.root.after(0, lambda: self._on_tor_test(ok))
+                            threading.Thread(target=_run_enable, daemon=True).start()
+                        else:
+                            self.root.after(0, lambda: self._on_tor_test(True))
+                    self.root.after(0, _prompt_enable)
+                    return
                 self.root.after(0, lambda: self._on_tor_test(True))
                 return
 

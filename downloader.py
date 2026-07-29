@@ -378,17 +378,15 @@ def download_all(
     console.rule("[bold cyan]== Phase 2/2: Downloading with IP rotation[/]")
     console.print()
 
-    # Tor mode safety check
+    # Use the user-configured worker count (no limit for Tor mode)
     effective_workers = max_workers
     if isinstance(rotator, TorRotator) and max_workers > 1:
         console.print(
-            "[yellow]! Tor mode: forcing 1 concurrent worker[/]\n"
-            "    [dim]NEWNYM changes the Tor circuit globally — "
-            "concurrent downloads would interfere.[/]\n"
-            "    To download truly in parallel, use [cyan]--mode proxy[/] "
-            "with a proxy pool."
+            "[yellow]! Tor mode: IP rotation is shared across all workers[/]\n"
+            "    [dim]Each download will try to rotate Tor's exit node, but since"
+            " NEWNYM is global,[/]\n"
+            "    [dim]concurrent workers share the same Tor circuit.[/]"
         )
-        effective_workers = 1
 
     console.print(f"  [dim]Rotator:[/] {rotator.name()}")
     console.print(f"  [dim]Workers:[/] {effective_workers}")
