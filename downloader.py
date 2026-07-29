@@ -217,17 +217,14 @@ def _worker_task(
     # --- Rotate IP before this download ---
     progress.update(task_id, description=f"🔄 {job.short_name}")
     if not rotator.rotate():
+        # Warn but continue — the current proxy/IP still works
         progress.update(
             task_id,
-            description=f"[red]❌ {job.short_name} — IP rotation failed[/]",
+            description=f"[yellow]⚠ {job.short_name} — rotation failed, continuing with current IP[/]",
         )
-        return DownloadResult(
-            vault_url=job.vault_url,
-            download_url=None,
-            filename=None,
-            success=False,
-            error="IP rotation failed (check Tor / proxies)",
-            elapsed_seconds=time.time() - start,
+        logger.warning(
+            "IP rotation failed for %s — continuing with current proxy",
+            job.vault_url,
         )
 
     # --- Create session ---

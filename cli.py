@@ -122,15 +122,33 @@ def _check_tor(args: dict):
     if args["mode"] != "tor":
         return
 
+    ctrl_port = args.get("tor_control_port", 9051)
+
     print(f"{Fore.CYAN}Checking Tor ...{Style.RESET_ALL}")
     if detect_tor():
-        print(f"  {Fore.GREEN}✓ Tor already running{Style.RESET_ALL}")
+        print(f"  {Fore.GREEN}✓ Tor SOCKS proxy reachable{Style.RESET_ALL}")
+        # Warn if the control port is not accessible (rotation will fail)
+        import socket
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(2)
+        try:
+            result = sock.connect_ex(("127.0.0.1", ctrl_port))
+            if result != 0:
+                print(
+                    f"  {Fore.YELLOW}⚠ ControlPort :{ctrl_port} not reachable —"
+                    f" IP rotation will be skipped{Style.RESET_ALL}"
+                )
+                print(
+                    f"    [dim]Add 'ControlPort {ctrl_port}' to your torrc to enable rotation.[/]"
+                )
+        finally:
+            sock.close()
         return
 
     print(f"  {Fore.YELLOW}Tor not running — attempting to start it ...{Style.RESET_ALL}")
     ok = ensure_tor_running(
         socks_port=args["tor_socks_port"],
-        control_port=args["tor_control_port"],
+        control_port=ctrl_port,
         interactive_install=True,
     )
     if ok:
