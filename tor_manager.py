@@ -422,8 +422,11 @@ def fix_tor_cookie_auth() -> bool:
 
     On Linux, Tor runs as user ``debian-tor`` and creates the cookie
     file with ``0600`` permissions, so regular users can't read it.
-    This function runs ``sudo chmod o+r <cookie_path>`` to make it
-    world-readable (safe enough since it only affects the local machine).
+
+    This function first tries ``sudo -n`` (non-interactive, no password
+    prompt).  If that fails (e.g. because sudo needs a password), it
+    prints a one-time fix command for the user to run manually and
+    returns False — the download will continue without IP rotation.
 
     Returns True once the cookie file is readable.
     """
@@ -435,28 +438,43 @@ def fix_tor_cookie_auth() -> bool:
         logger.error("Could not find Tor control auth cookie to fix.")
         return False
 
-    logger.info("Tor cookie file %s is not readable — fixing with sudo chmod", cookie_path)
-
+    # Try non-interactive sudo first (works if user has passwordless sudo)
+    logger.info("Tor cookie file %s is not readable — attempting sudo -n chmod", cookie_path)
     try:
         proc = subprocess.run(
-            ["sudo", "chmod", "o+r", cookie_path],
+            ["sudo", "-n", "chmod", "o+r", cookie_path],
             capture_output=True,
             text=True,
-            timeout=30,
+            timeout=5,
         )
-        if proc.returncode != 0:
-            logger.error("Failed to fix cookie permissions: %s", proc.stderr.strip())
-            return False
+        if proc.returncode == 0:
+            if _is_cookie_readable():
+                logger.info("Tor cookie permissions fixed successfully.")
+                return True
+            else:
+                logger.error("sudo chmod claimed success but cookie is still not readable.")
+                return False
+    except subprocess.TimeoutExpired:
+        logger.warning("sudo -n chmod timed out (passwordless sudo not configured).")
     except Exception as exc:
-        logger.error("Error fixing cookie permissions: %s", exc)
-        return False
+        logger.warning("sudo -n chmod failed: %s", exc)
 
-    # Verify fix
-    if _is_cookie_readable():
-        logger.info("Tor cookie permissions fixed successfully.")
-        return True
+    # Non-interactive sudo failed — print manual fix command
+    logger.warning(
+        "Could not auto-fix Tor cookie permissions.\n"
+        "  To enable IP rotation, run this command in your terminal:\n"
+        "    sudo chmod o+r %s\n"
+        "  The download will continue without IP rotation for now.",
+        cookie_path,
+    )
+    # Also print to stderr so the user sees it even if logging is filtered
+    print(
+        "\n[!] Tor cookie not readable — run this command to enable IP rotation:",
+        file=sys.stderr,
+    )
+    print(f"    sudo chmod o+r {cookie_path}", file=sys.stderr)
+    print()
 
-    logger.error("Cookie permissions still not fixed after chmod.")
     return False
 
 
