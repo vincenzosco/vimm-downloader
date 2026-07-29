@@ -7,7 +7,7 @@ name = "vimm-bulk-downloader"
 version = "1.0.0"
 description = "Download multiple games from vimm.net concurrently with IP rotation"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
     "requests>=2.31.0",
@@ -20,3 +20,6 @@ dependencies = [
 
 [project.scripts]
 vimm-downloader = "vimm_bulk_downloader.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vimm_bulk_downloader"]
