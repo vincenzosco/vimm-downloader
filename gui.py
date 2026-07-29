@@ -80,6 +80,7 @@ def load_config() -> dict:
         "proxy_file": "",
         "output_dir": str(Path.cwd() / "downloads"),
         "workers": 3,
+        "download_format": "auto",
         "window_geometry": "1100x720",
     }
     try:
@@ -545,6 +546,7 @@ class VimmBulkGUI:
             "download_url": None,  # resolved later
             "filename": filename,
             "title": title,
+            "format": self.format_var.get(),  # selected format
         })
         if not silent:
             self._refresh_queue_display()
@@ -585,14 +587,29 @@ class VimmBulkGUI:
                                                command=self._add_url_dialog)
         self.download_format_btn.pack(side="right", padx=(4, 0))
 
-        # --- URL entry ---
-        url_entry_frame = ttk.Frame(tab)
-        url_entry_frame.pack(fill="x", pady=(0, 8))
+        # --- Format selector + URL entry row ---
+        format_url_frame = ttk.Frame(tab)
+        format_url_frame.pack(fill="x", pady=(0, 8))
+
+        # Download format selector
+        ttk.Label(format_url_frame, text="Format:",
+                  font=("Segoe UI", 9), foreground=TEXT_SECONDARY).pack(side="left")
+        self.format_var = tk.StringVar(value=self.config.get("download_format", "auto"))
+        self.format_combo = ttk.Combobox(
+            format_url_frame,
+            textvariable=self.format_var,
+            values=["auto", "iso", "wbfs", "rvz", "zip", "7z"],
+            width=8,
+            state="readonly",
+        )
+        self.format_combo.pack(side="left", padx=(4, 12))
+
+        # URL entry
         self.dl_url_var = tk.StringVar()
-        self.dl_url_entry = ttk.Entry(url_entry_frame, textvariable=self.dl_url_var,
+        self.dl_url_entry = ttk.Entry(format_url_frame, textvariable=self.dl_url_var,
                                        font=("Segoe UI", 10))
         self.dl_url_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
-        self.dl_url_btn = ttk.Button(url_entry_frame, text="Add URL",
+        self.dl_url_btn = ttk.Button(format_url_frame, text="Add URL",
                                       command=self._add_url_from_entry)
         self.dl_url_btn.pack(side="right")
         self.dl_url_entry.bind("<Return>", lambda e: self._add_url_from_entry())
@@ -792,7 +809,10 @@ class VimmBulkGUI:
         output_dir.mkdir(parents=True, exist_ok=True)
 
         vault_id = item["vault_url"].rstrip("/").split("/")[-1]
-        output_path = output_dir / f"{item['filename']}.zip"
+        # Use the user's chosen format as fallback extension
+        chosen_fmt = item.get("format", "auto")
+        fallback_ext = f".{chosen_fmt}" if chosen_fmt != "auto" else ".zip"
+        output_path = output_dir / f"{item['filename']}{fallback_ext}"
 
         # Rotate IP
         rotator.rotate()
@@ -1088,6 +1108,7 @@ class VimmBulkGUI:
             self.config["proxy_file"] = self.proxy_path_var.get()
             self.config["output_dir"] = self.output_dir_var.get()
             self.config["workers"] = int(self.workers_var.get())
+            self.config["download_format"] = self.format_var.get()
             save_config(self.config)
             self.settings_status["text"] = "✅ Settings saved successfully!"
             self.settings_status["foreground"] = SUCCESS

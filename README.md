@@ -4,14 +4,15 @@ Download multiple games from [vimm.net](https://vimm.net) at the same time, bypa
 
 ## Features
 
-- **Concurrent downloads** -- download many games at once, each using a different IP address
+- **Concurrent downloads** -- download up to 40 games at once, each using a different IP address
 - **IP rotation backends**:
   - **Tor** (free) -- automatically rotates Tor exit nodes for each download
   - **Proxy list** -- rotates through a pool of HTTP/SOCKS proxies
 - **Search** -- search the vault by console and query directly from the CLI
-- **GUI mode** -- desktop interface with search, download queue, and settings management
+- **GUI mode** -- desktop interface with search, download queue, format selector, and settings management
+- **Format selector** -- choose the saved file extension: auto, iso, wbfs, rvz, zip, or 7z
 - **Rich progress bars** -- real-time display of download speed, percentage, and ETA (CLI mode)
-- **Configurable** -- control concurrency, output directory, Tor ports, and more
+- **Configurable** -- control concurrency (up to 40), output directory, Tor ports, and more
 
 ## How it works
 
@@ -135,8 +136,8 @@ python -m vimm_bulk_downloader gui
 
 The GUI provides three tabs:
 - **Search** -- search the vault, browse results, and add games to the download queue
-- **Downloads** -- manage the download queue with real-time progress bars
-- **Settings** -- configure IP rotation, output directory, and concurrency
+- **Downloads** -- manage the download queue with real-time progress bars and a format selector (auto/iso/wbfs/rvz/zip/7z) for the saved file extension
+- **Settings** -- configure IP rotation, output directory, and concurrency (up to 40 workers)
 
 ### Backward-compatible usage
 
@@ -188,19 +189,18 @@ GUI subcommand:
 
 ```
 vimm_bulk_downloader/
+  __init__.py             Package init with version
+  __main__.py             Entry point for "python -m"
+  cli.py                  Command-line interface with subcommands
+  console_list.py         Console name-to-code mappings
+  downloader.py           Concurrent download orchestrator with Rich progress
+  gui.py                  tkinter desktop GUI
+  ip_rotator.py           IP rotation backends (Tor, proxy list)
+  vimm_scraper.py         Scrapes vault pages for download URLs
+  vimm_search.py          Search engine with Rich table output
   README.md
   requirements.txt
   .gitignore
-  vimm_bulk_downloader/
-    __init__.py           Package init with version
-    __main__.py           Entry point for "python -m"
-    cli.py                Command-line interface with subcommands
-    downloader.py         Concurrent download orchestrator with Rich progress
-    vimm_scraper.py       Scrapes vault pages for download URLs
-    vimm_search.py        Search engine with Rich table output
-    ip_rotator.py         IP rotation backends (Tor, proxy list)
-    console_list.py       Console name-to-code mappings
-    gui.py                tkinter desktop GUI
 ```
 
 ## Disclaimer
