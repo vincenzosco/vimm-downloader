@@ -9,6 +9,7 @@ Download multiple games from [vimm.net](https://vimm.net) at the same time, bypa
   - **Tor** (free) -- automatically rotates Tor exit nodes for each download
   - **Proxy list** -- rotates through a pool of HTTP/SOCKS proxies
 - **Auto-start Tor** -- automatically starts the Tor daemon when needed (and installs it if missing)
+- **Auto-enable ControlPort** -- if Tor is running without a ControlPort, the tool asks whether to enable it automatically with sudo
 - **Search** -- search the vault by console and query directly from the CLI
 - **GUI mode** -- desktop interface with search, download queue, format selector, and settings management
 - **Format selector** -- choose the saved file extension: auto, iso, wbfs, rvz, zip, or 7z
@@ -29,6 +30,7 @@ Since vimm.net limits one download per IP address, using a different IP for each
 - Python 3.10+
 - `pip install -r requirements.txt`
 - **Linux users only:** `sudo apt install python3-tk -y` (required for GUI mode -- tkinter is not included by default on Linux)
+- `pip install -r requirements.txt` will install: requests, beautifulsoup4, rich, colorama, stem, PySocks
 
 ### Tor mode (default) -- auto-managed
 
@@ -45,6 +47,13 @@ Supported package managers:
 
 The tool generates a temporary `torrc` configuration with proper SOCKS and Control
 ports, and cleans up the Tor process on exit. No manual setup needed.
+
+If Tor is already running via the system service but the ControlPort is disabled
+(common on Linux), the tool detects this and asks whether to automatically:
+1. Add `ControlPort 9051` and `CookieAuthentication 1` to `/etc/tor/torrc`
+2. Restart the Tor service with `sudo systemctl restart tor`
+
+This enables IP rotation without any manual configuration.
 
 To use an existing Tor daemon instead (e.g., running via `brew services` or `systemctl`),
 simply make sure it is running before launching the tool. The auto-start logic detects
@@ -126,9 +135,14 @@ python -m vimm_bulk_downloader download \
     --proxy-file proxies.txt \
     --url-file games.txt
 
-# Control concurrency (up to 40 workers in GUI, default 3)
+# Control concurrency (up to 40 workers, default 3)
 python -m vimm_bulk_downloader download \
     --workers 5 \
+    --url-file games.txt
+
+# Tor mode now allows multiple workers (each download uses the same Tor circuit)
+python -m vimm_bulk_downloader download \
+    --workers 2 \
     --url-file games.txt
 
 # Save to a specific folder
@@ -168,7 +182,7 @@ vimm-downloader gui
 The GUI provides three tabs:
 - **Search** -- search the vault, browse results, and add games to the download queue
 - **Downloads** -- manage the download queue with real-time progress bars and a format selector (auto/iso/wbfs/rvz/zip/7z) for the saved file extension
-- **Settings** -- configure IP rotation (Tor auto-start/install, proxy list), output directory, and concurrency (up to 40 workers)
+- **Settings** -- configure IP rotation (Tor auto-start/install, auto-enable ControlPort, proxy list), output directory, and concurrent workers (up to 40)
 
 ### Backward-compatible usage
 
@@ -192,7 +206,7 @@ Download subcommand:
   --tor-control-port PORT  Tor control port (default: 9051)
   --tor-password PWD     Tor control password (optional)
   -o, --output DIR       Output directory (default: current directory)
-  -w, --workers N        Max concurrent downloads (default: 3, max: 40 in GUI)
+  -w, --workers N        Max concurrent downloads (default: 3, max: 40)
   --no-primary           Don't rewrite download2.vimm.net to download.vimm.net
   -v, --verbose          Show debug logs
   --version              Show version
@@ -212,7 +226,9 @@ GUI subcommand:
 
 - vimm.net is slow -- each download is typically capped at ~500 KB/s. Factor this into your expectations.
 - Tor adds additional latency. For better speed, use a proxy pool with `--mode proxy`.
-- To run 40 concurrent downloads, you need 40 different proxies in your pool. Tor mode is limited to 1 worker because the NEWNYM signal changes the circuit globally.
+- To run 40 concurrent downloads, you need 40 different proxies in your pool.
+- When using Tor mode with multiple workers, each download uses the same Tor circuit (NEWNYM is global). Concurrent downloads still work, but they will share the same exit node IP.
+- For true parallel downloads with different IPs, use `--mode proxy` with a pool of proxies.
 - The tool automatically rewrites `download2.vimm.net` to `download.vimm.net` (unless `--no-primary` is passed), which the community has found more reliable.
 - Tor is auto-started on demand and stopped when the program exits. No need to manage it manually.
 - When using the GUI with Tor mode, clicking "Test Tor" in Settings or starting a download will automatically install Tor (if missing) and start it.
