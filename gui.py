@@ -43,7 +43,7 @@ from .ip_rotator import (
 )
 from .tor_manager import TorManager, stop_managed_tor, control_port_reachable, enable_control_port_and_fix_cookie
 from .console_list import CONSOLE_TABLE
-from .downloader import _format_size
+from .downloader import _format_size, _PART_SUFFIX, _get_part_path, _check_resume
 
 logger = logging.getLogger(__name__)
 
@@ -899,30 +899,54 @@ class VimmBulkGUI:
             except Exception:
                 pass
 
-            # Check for existing file
+            # Use .vimm_part file for in-progress downloads
+            part_path = Path(_get_part_path(str(output_path)))
+
+            # If the final file already exists, skip entirely
             if output_path.exists():
                 _q(done=True, elapsed=0)
                 return
 
-            # Stream download
-            resp = session.get(dl_url, stream=True, timeout=60)
+            # Check for partial download to resume (reuses shared logic)
+            resume_bytes = _check_resume(session, dl_url, str(part_path))
+            if resume_bytes > 0:
+                _q(status_text=f"Resuming ({_format_size(resume_bytes)} already done)")
+                logger.info("Resuming download: %d bytes already on disk", resume_bytes)
+
+            # Stream download (with Range header if resuming)
+            headers = {}
+            if resume_bytes > 0:
+                headers["Range"] = f"bytes={resume_bytes}-"
+
+            resp = session.get(dl_url, stream=True, timeout=60, headers=headers)
             resp.raise_for_status()
 
-            total = int(resp.headers.get("Content-Length", "0")) or None
+            # Determine total size
+            total = None
+            if resume_bytes > 0 and "Content-Range" in resp.headers:
+                cr = resp.headers["Content-Range"]
+                try:
+                    total = int(cr.split("/")[-1])
+                except (ValueError, IndexError):
+                    total = None
+            else:
+                total = int(resp.headers.get("Content-Length", "0")) or None
+
             written = 0
             start_time = time.time()
             last_update = 0.0
 
             if total:
-                _q(set_total=total, set_value=0, mode="determinate")
+                _q(set_total=total, set_value=resume_bytes if resume_bytes > 0 else 0, mode="determinate")
             else:
                 _q(set_total=None, set_value=0, mode="indeterminate")
 
-            with open(output_path, "wb") as fh:
+            mode = "ab" if resume_bytes > 0 else "wb"
+            with open(part_path, mode) as fh:
                 for chunk in resp.iter_content(chunk_size=128 * 1024):
                     if self._stop_flag:
                         fh.close()
-                        os.remove(output_path)
+                        part_path.unlink(missing_ok=True)
                         card.status = "queued"
                         _q(stopped=True)
                         return
@@ -933,20 +957,27 @@ class VimmBulkGUI:
 
                         # Update progress (throttled)
                         now = time.time()
-                        if now - last_update > 0.15:  # ~6 updates/sec
+                        if now - last_update > 0.15:
                             last_update = now
                             elapsed = now - start_time
                             speed = _format_size(int(written / elapsed)) + "/s" if elapsed > 0 else ""
-                            pct = (written / total * 100) if total else 0
-                            _q(current=written, total=total, pct=pct, speed=speed)
+                            total_sofar = resume_bytes + written
+                            pct = (total_sofar / total * 100) if total else 0
+                            _q(current=total_sofar, total=total, pct=pct, speed=speed)
 
+            # Rename .part to final filename on success
             elapsed = time.time() - start_time
+            try:
+                part_path.rename(output_path)
+            except OSError as exc:
+                logger.warning("Could not rename .part file: %s", exc)
+                output_path = part_path  # fall back to .part name
+
             _q(done=True, elapsed=elapsed, filename=str(output_path.name), bytes=written)
 
         except Exception as e:
             _q(failed=True, reason=str(e)[:60])
-            if output_path.exists():
-                os.remove(output_path)
+            # Keep .part file for future resume attempts (don't delete)
         finally:
             session.close()
 

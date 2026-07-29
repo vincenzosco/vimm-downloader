@@ -74,6 +74,9 @@ class DownloadJob:
 # Helpers
 # ---------------------------------------------------------------------------
 
+_PART_SUFFIX = ".vimm_part"
+
+
 def _unique_path(path: str) -> str:
     """If *path* exists, append a counter before the extension."""
     p = Path(path)
@@ -85,6 +88,54 @@ def _unique_path(path: str) -> str:
         if not candidate.exists():
             return str(candidate)
         counter += 1
+
+
+def _get_part_path(path: str) -> str:
+    """Return the .vimm_part path used for in-progress downloads."""
+    return path + _PART_SUFFIX
+
+
+def _check_resume(session: requests.Session, url: str, part_path: str) -> int:
+    """Check if we can resume a partial download.
+
+    Returns the number of bytes already downloaded (0 if no resume possible).
+    """
+    if not os.path.isfile(part_path) or os.path.getsize(part_path) == 0:
+        return 0
+
+    try:
+        head = session.head(url, timeout=15)
+        accept_ranges = head.headers.get("Accept-Ranges", "")
+        content_len = int(head.headers.get("Content-Length", "0") or 0)
+        existing = os.path.getsize(part_path)
+
+        if "bytes" not in accept_ranges.lower():
+            logger.info("Server does not support Range requests — starting from scratch")
+            os.remove(part_path)
+            return 0
+
+        if content_len and existing >= content_len:
+            # Already fully downloaded (edge case)
+            logger.info("Partial file is already complete — finishing up")
+            return existing
+
+        if content_len and existing > content_len:
+            # File changed on server (new one is smaller) — restart
+            logger.info(
+                "File changed on server (new size %d < existing %d) — restarting",
+                content_len, existing,
+            )
+            os.remove(part_path)
+            return 0
+
+        logger.info(
+            "Resuming download: %d of %d bytes already written",
+            existing, content_len or 0,
+        )
+        return existing
+    except Exception as exc:
+        logger.warning("Resume check failed (%s) — starting from scratch", exc)
+        return 0
 
 
 def _format_size(n: int) -> str:
@@ -165,36 +216,61 @@ def _stream_download(
     progress: Progress,
     task_id: TaskID,
     chunk_size: int = 64 * 1024,
+    resume_bytes: int = 0,
 ) -> tuple[bool, int]:
     """Stream a file, updating the Rich progress bar along the way.
+
+    Supports resuming interrupted downloads via the ``Range`` HTTP header
+    when *resume_bytes* > 0.  The file is opened in append mode and we
+    request only the remaining bytes from the server.
 
     Returns (success, bytes_written).
     """
     try:
-        resp = session.get(download_url, stream=True, timeout=60)
+        headers = {}
+        if resume_bytes > 0:
+            # Part of the file already exists — request remaining bytes
+            headers["Range"] = f"bytes={resume_bytes}-"
+
+        resp = session.get(download_url, stream=True, timeout=60, headers=headers)
         resp.raise_for_status()
 
-        total = int(resp.headers.get("Content-Length", "0")) or None
-        written = 0
+        # Determine total size: from Content-Length (full) or Content-Range (resumed)
+        total = None
+        if resume_bytes > 0 and "Content-Range" in resp.headers:
+            # Parse "bytes X-Y/TOTAL" from Content-Range
+            cr = resp.headers["Content-Range"]
+            try:
+                total = int(cr.split("/")[-1])
+            except (ValueError, IndexError):
+                total = None
+        else:
+            total = int(resp.headers.get("Content-Length", "0")) or None
 
-        # If we know the total, set it on the task so the bar works correctly
+        written = 0
+        mode = "ab" if resume_bytes > 0 else "wb"
+
         if total:
             progress.update(task_id, total=total)
+            if resume_bytes > 0:
+                # Advance the bar to show what was already downloaded
+                progress.update(task_id, completed=resume_bytes)
 
-        with open(output_path, "wb") as fh:
+        with open(output_path, mode) as fh:
             for chunk in resp.iter_content(chunk_size=chunk_size):
                 if chunk:
                     fh.write(chunk)
                     written += len(chunk)
                     progress.update(task_id, advance=len(chunk))
 
-        # Mark as complete (avoids a stale incomplete bar if total was unknown)
-        progress.update(task_id, completed=written or 1, total=written or 1)
+        total_written = resume_bytes + written
+        progress.update(task_id, completed=total_written, total=total_written)
         return (True, written)
 
     except Exception as exc:
         logger.error("Stream download failed for %s: %s", download_url, exc)
-        if os.path.isfile(output_path):
+        # Only delete the file if we weren't resuming — keep partials for next time
+        if resume_bytes == 0 and os.path.isfile(output_path):
             os.remove(output_path)
         return (False, 0)
 
@@ -250,15 +326,32 @@ def _worker_task(
     vault_id = job.vault_url.rstrip("/").split("/")[-1]
     output_path = _resolve_filename(session, job.download_url, vault_id, job.output_dir)
 
-    # --- Download with real-time progress ---
+    # --- Check for partial download to resume ---
+    part_path = _get_part_path(output_path)
+    resume_bytes = _check_resume(session, job.download_url, part_path)
+    if resume_bytes > 0:
+        progress.update(
+            task_id,
+            description=f"[yellow](RESUME)[/] {job.short_name} ({_format_size(resume_bytes)} already downloaded)[/]",
+        )
+        logger.info("Resuming %s: %d bytes already on disk", job.short_name, resume_bytes)
+
+    # --- Download with real-time progress (to .part file) ---
     success, bytes_written = _stream_download(
-        session, job.download_url, output_path, progress, task_id,
+        session, job.download_url, part_path, progress, task_id,
+        resume_bytes=resume_bytes,
     )
 
     elapsed = time.time() - start
-    session.close()
 
     if success:
+        # Rename .part → final filename
+        try:
+            os.rename(part_path, output_path)
+        except OSError as exc:
+            logger.warning("Could not rename .part file: %s", exc)
+            output_path = part_path  # fall back to .part name
+
         progress.update(
             task_id,
             description=f"[green](OK)[/] {os.path.basename(output_path)}",
@@ -268,8 +361,10 @@ def _worker_task(
             task_id,
             description=f"[red](ERR) {job.short_name} — download failed[/]",
         )
+        # Keep the .part file on disk for future resume attempts
 
-    progress.stop_task(task_id)  # stop spinner for both success & failure
+    session.close()
+    progress.stop_task(task_id)
 
     return DownloadResult(
         vault_url=job.vault_url,
