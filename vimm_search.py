@@ -141,16 +141,17 @@ def _parse_results(html: str, code: Optional[str]) -> list[SearchResult]:
         if len(cells) < 2:
             continue
 
-        # --- Parse common fields ---
-        title_tag = cells[1].find("a") if not code else cells[0].find("a")
-        title = title_tag.get_text(strip=True) if title_tag else "—"
-        link_tag = title_tag or cells[0].find("a") or cells[1].find("a")
-        href = link_tag.get("href", "") if link_tag else ""
+        if not code:  # All-consoles search: cells[1] = Title
+            href, title = _visible_link_href(cells[1])
+        else:  # Single-console search: cells[0] = Title
+            href, title = _visible_link_href(cells[0])
+
         vault_url = f"https://vimm.net{href}" if href.startswith("/") else href
 
         # Region from <img> titles
+        region_cell = cells[2] if not code else cells[1]
         region_parts: list[str] = []
-        for img in cells[2].find_all("img") if not code else cells[1].find_all("img"):
+        for img in region_cell.find_all("img"):
             alt = img.get("title", "") or img.get("alt", "")
             if alt:
                 region_parts.append(alt)
@@ -181,6 +182,26 @@ def _parse_results(html: str, code: Optional[str]) -> list[SearchResult]:
             ))
 
     return results
+
+
+def _visible_link_href(cell) -> tuple:
+    """Return (href, title_text) from the first visible <a> in *cell*.
+
+    vimm.net prepends a hidden <a> with rating text (e.g. "9")
+    style="display:none" before the real game link.  This helper
+    skips those hidden anchors.
+    """
+    for a in cell.find_all("a"):
+        style = (a.get("style") or "").lower()
+        if "display:none" in style or "display: none" in style:
+            continue
+        return a.get("href", ""), a.get_text(strip=True)
+    # Fallback — if all links were hidden, use the last one
+    all_links = cell.find_all("a")
+    if all_links:
+        a = all_links[-1]
+        return a.get("href", ""), a.get_text(strip=True)
+    return "", "—"
 
 
 # ---------------------------------------------------------------------------
