@@ -21,5 +21,8 @@ dependencies = [
 [project.scripts]
 vimm-downloader = "vimm_bulk_downloader.cli:main"
 
-[tool.setuptools.packages.find]
-include = ["vimm_bulk_downloader"]
+[tool.setuptools]
+packages = ["vimm_bulk_downloader"]
+
+[tool.setuptools.package-dir]
+vimm_bulk_downloader = "."
