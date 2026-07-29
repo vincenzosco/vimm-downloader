@@ -27,6 +27,7 @@ from rich.progress import (
     TaskID,
     TextColumn,
     TimeElapsedColumn,
+    TimeRemainingColumn,
     TransferSpeedColumn,
     SpinnerColumn,
 )
@@ -286,7 +287,10 @@ def _worker_task(
 # ---------------------------------------------------------------------------
 
 def _make_progress() -> Progress:
-    """Create the Rich Progress instance with our custom columns."""
+    """Create the Rich Progress instance with our custom columns.
+
+    Columns: description, spinner, bar, percentage, speed, ETA, elapsed.
+    """
     return Progress(
         TextColumn("[progress.description]{task.description}", justify="left"),
         SpinnerColumn(spinner_name="dots", style="grey50"),
@@ -294,6 +298,8 @@ def _make_progress() -> Progress:
         TextColumn("[progress.percentage]{task.percentage:>3.1f}%", style="green"),
         "·",
         TransferSpeedColumn(),
+        "·",
+        TimeRemainingColumn(),
         "·",
         TimeElapsedColumn(),
         expand=True,
