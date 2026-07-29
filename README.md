@@ -28,6 +28,7 @@ Since vimm.net limits one download per IP address, using a different IP for each
 
 - Python 3.10+
 - `pip install -r requirements.txt`
+- **Linux users only:** `sudo apt install python3-tk -y` (required for GUI mode -- tkinter is not included by default on Linux)
 
 ### Tor mode (default) -- auto-managed
 
