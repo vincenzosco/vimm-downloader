@@ -875,6 +875,10 @@ class VimmBulkGUI:
             "Cookie": "counted=1",
         })
 
+        def _q(**kw):
+            """Shortcut to queue a card update."""
+            self._progress_queue.put({"card": card, **kw})
+
         try:
             # HEAD request for filename
             try:
@@ -889,7 +893,7 @@ class VimmBulkGUI:
 
             # Check for existing file
             if output_path.exists():
-                card.mark_done(0)
+                _q(done=True, elapsed=0)
                 return
 
             # Stream download
@@ -901,11 +905,10 @@ class VimmBulkGUI:
             start_time = time.time()
             last_update = 0.0
 
-            card.total_bytes = total
             if total:
-                card._progress["value"] = 0
+                _q(set_total=total, set_value=0, mode="determinate")
             else:
-                card._progress["mode"] = "indeterminate"
+                _q(set_total=None, set_value=0, mode="indeterminate")
 
             with open(output_path, "wb") as fh:
                 for chunk in resp.iter_content(chunk_size=128 * 1024):
@@ -913,7 +916,7 @@ class VimmBulkGUI:
                         fh.close()
                         os.remove(output_path)
                         card.status = "queued"
-                        card._status_label["text"] = "Stopped"
+                        _q(stopped=True)
                         return
 
                     if chunk:
@@ -927,25 +930,13 @@ class VimmBulkGUI:
                             elapsed = now - start_time
                             speed = _format_size(int(written / elapsed)) + "/s" if elapsed > 0 else ""
                             pct = (written / total * 100) if total else 0
-                            self._progress_queue.put({
-                                "card": card,
-                                "current": written,
-                                "total": total,
-                                "pct": pct,
-                                "speed": speed,
-                            })
+                            _q(current=written, total=total, pct=pct, speed=speed)
 
             elapsed = time.time() - start_time
-            self._progress_queue.put({
-                "card": card,
-                "done": True,
-                "elapsed": elapsed,
-                "filename": str(output_path.name),
-                "bytes": written,
-            })
+            _q(done=True, elapsed=elapsed, filename=str(output_path.name), bytes=written)
 
         except Exception as e:
-            card.mark_failed(str(e)[:60])
+            _q(failed=True, reason=str(e)[:60])
             if output_path.exists():
                 os.remove(output_path)
         finally:
@@ -960,18 +951,34 @@ class VimmBulkGUI:
                 if not card:
                     continue
 
-                if msg.get("done"):
-                    card.mark_done(msg.get("elapsed", 0))
-                elif msg.get("failed"):
-                    card.mark_failed(msg.get("reason", "Failed"))
-                elif msg.get("running"):
-                    card.mark_running()
-                    card.update_progress(0, None, status_text=msg.get("status_text", ""))
-                else:
-                    card.update_progress(
-                        msg.get("current", 0), msg.get("total"),
-                        speed=msg.get("speed", ""),
-                    )
+                try:
+                    if msg.get("done"):
+                        card.mark_done(msg.get("elapsed", 0))
+                    elif msg.get("failed"):
+                        card.mark_failed(msg.get("reason", "Failed"))
+                    elif msg.get("running"):
+                        card.mark_running()
+                        card.update_progress(0, None, status_text=msg.get("status_text", ""))
+                    elif msg.get("stopped"):
+                        card.status = "queued"
+                        card._status_label["text"] = "Stopped"
+                        card._status_label["foreground"] = TEXT_SECONDARY
+                        card._progress["value"] = 0
+                        card._progress["mode"] = "determinate"
+                    elif "mode" in msg:
+                        card._progress["mode"] = msg["mode"]
+                        if "set_value" in msg:
+                            card._progress["value"] = msg["set_value"]
+                        if "set_total" in msg:
+                            card.total_bytes = msg["set_total"]
+                    else:
+                        card.update_progress(
+                            msg.get("current", 0), msg.get("total"),
+                            speed=msg.get("speed", ""),
+                        )
+                except tk.TclError:
+                    # Card widget was destroyed (e.g. queue refresh), skip gracefully
+                    pass
         except queue.Empty:
             pass
 
