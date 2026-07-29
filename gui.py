@@ -747,8 +747,10 @@ class VimmBulkGUI:
             card = item.get("card")
             if not card:
                 continue
-            card.mark_running()
-            card.update_progress(0, None, status_text="Resolving...")
+            # Queue UI updates instead of touching widgets directly
+            self._progress_queue.put({
+                "card": card, "running": True, "status_text": "Resolving...",
+            })
 
             try:
                 dl_url = extract_download_url(
@@ -758,7 +760,9 @@ class VimmBulkGUI:
                 )
                 item["download_url"] = dl_url
             except VimmScraperError as e:
-                card.mark_failed(str(e))
+                self._progress_queue.put({
+                    "card": card, "failed": True, "reason": str(e),
+                })
                 continue
 
         session.close()
@@ -815,7 +819,9 @@ class VimmBulkGUI:
             for item in pending:
                 card = item.get("card")
                 if card:
-                    card.mark_failed(str(e))
+                    self._progress_queue.put({
+                        "card": card, "failed": True, "reason": str(e),
+                    })
             self.root.after(0, self._on_downloads_complete)
             return
 
@@ -946,7 +952,7 @@ class VimmBulkGUI:
             session.close()
 
     def _poll_progress(self):
-        """Periodically check the progress queue and update UI."""
+        """Periodically check the progress queue and update UI on the main thread."""
         try:
             while True:
                 msg = self._progress_queue.get_nowait()
@@ -956,9 +962,14 @@ class VimmBulkGUI:
 
                 if msg.get("done"):
                     card.mark_done(msg.get("elapsed", 0))
+                elif msg.get("failed"):
+                    card.mark_failed(msg.get("reason", "Failed"))
+                elif msg.get("running"):
+                    card.mark_running()
+                    card.update_progress(0, None, status_text=msg.get("status_text", ""))
                 else:
                     card.update_progress(
-                        msg["current"], msg["total"],
+                        msg.get("current", 0), msg.get("total"),
                         speed=msg.get("speed", ""),
                     )
         except queue.Empty:
