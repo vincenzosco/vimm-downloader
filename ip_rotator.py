@@ -20,6 +20,9 @@ from .tor_manager import TorManager
 
 logger = logging.getLogger(__name__)
 
+# Suppress stem's noisy INFO-level socket-closed messages
+logging.getLogger("stem").setLevel(logging.WARNING)
+
 
 # ---------------------------------------------------------------------------
 # Abstract base
