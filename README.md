@@ -8,6 +8,8 @@ Download multiple games from [vimm.net](https://vimm.net) at the same time, bypa
 - **IP rotation backends**:
   - **Tor** (free) -- automatically rotates Tor exit nodes for each download
   - **Proxy list** -- rotates through a pool of HTTP/SOCKS proxies
+- **Default free proxy pool** -- fetch fresh SOCKS5 proxies from the [Proxifly CDN](https://github.com/proxifly/free-proxy-list) (updated every 5 minutes) with `--proxy-list default`
+- **Proxy health-checking** -- each proxy is tested against a live endpoint before use; dead proxies are automatically removed (can be skipped with `--no-proxy-check`)
 - **Auto-start Tor** -- automatically starts the Tor daemon when needed (and installs it if missing)
 - **Auto-enable ControlPort** -- if Tor is running without a ControlPort, the tool asks whether to enable it automatically with sudo
 - **Search** -- search the vault by console and query directly from the CLI
@@ -61,11 +63,65 @@ an already-running Tor and skips startup.
 
 ### Proxy mode
 
+You can use proxies in two ways:
+
+**1. Default free proxy pool (recommended):**
+
+The tool can fetch fresh SOCKS5 proxies from the [Proxifly free-proxy-list CDN](https://github.com/proxifly/free-proxy-list), which is updated every 5 minutes with 150+ working proxies from 100+ countries. Each proxy is health-checked automatically before use.
+
+```bash
+python -m vimm_bulk_downloader download \
+    --mode proxy --proxy-list default \
+    --url-file games.txt
+```
+
+Short form (``--proxy-list`` without a value defaults to ``default``):
+
+```bash
+python -m vimm_bulk_downloader download \
+    --mode proxy --proxy-list \
+    --url-file games.txt
+```
+
+**2. Custom proxy file:**
+
 Collect a list of HTTP or SOCKS proxies (one per line in a text file). Free proxy lists can be found at:
 - [Free Proxy List](https://free-proxy-list.net/)
 - [ProxyScrape](https://proxyscrape.com/free-proxy-list)
 
+```bash
+python -m vimm_bulk_downloader download \
+    --mode proxy --proxy-file proxies.txt \
+    --url-file games.txt
+```
+
+**3. Inline proxy URLs:**
+
+Pass a comma-separated list of proxy URLs directly:
+
+```bash
+python -m vimm_bulk_downloader download \
+    --mode proxy --proxy-list "socks5://127.0.0.1:1080,http://proxy.example.com:8080" \
+    --url-file games.txt
+```
+
 Note: vimm.net may block datacenter IPs. Residential or SOCKS5 proxies work best.
+
+### Proxy health-checking
+
+By default, all proxies are tested before use. The tool:
+1. Tests each proxy against `https://httpbin.org/ip` (10-second timeout)
+2. Runs up to 30 tests in parallel
+3. Shows a real-time progress bar: `12 alive, 45/150 tested`
+4. Removes dead proxies automatically -- only working ones are kept
+
+To skip health-checking (faster startup, but may use dead proxies):
+
+```bash
+python -m vimm_bulk_downloader download \
+    --mode proxy --proxy-list default --no-proxy-check \
+    --url-file games.txt
+```
 
 ## Installation
 
@@ -182,7 +238,7 @@ vimm-downloader gui
 The GUI provides three tabs:
 - **Search** -- search the vault, browse results, and add games to the download queue
 - **Downloads** -- manage the download queue with real-time progress bars and a format selector (auto/iso/wbfs/rvz/zip/7z) for the saved file extension
-- **Settings** -- configure IP rotation (Tor auto-start/install, auto-enable ControlPort, proxy list), output directory, and concurrent workers (up to 40)
+- **Settings** -- configure IP rotation (Tor auto-start/install, auto-enable ControlPort, proxy file, default proxy pool checkbox, proxy health-check toggle), output directory, and concurrent workers (up to 40)
 
 ### Backward-compatible usage
 
@@ -198,18 +254,23 @@ python -m vimm_bulk_downloader https://vimm.net/vault/9663
 usage: vimm-bulk-downloader [download|search|consoles|gui] ...
 
 Download subcommand:
-  VAULT_URL              One or more vimm.net vault URLs
-  -f, --url-file FILE    Path to a file containing vault URLs (one per line)
-  -m, --mode tor|proxy   IP rotation backend (default: tor)
-  -p, --proxy-file FILE  Path to proxy list file (mode=proxy)
-  --tor-socks-port PORT  Tor SOCKS5 port (default: 9050)
+  VAULT_URL                One or more vimm.net vault URLs
+  -f, --url-file FILE      Path to a file containing vault URLs (one per line)
+  -m, --mode tor|proxy     IP rotation backend (default: tor)
+  -p, --proxy-file FILE    Path to proxy list file (mode=proxy)
+  --proxy-list SOURCE      Proxy source: "default" to fetch free proxies from
+                           Proxifly CDN, or a comma-separated list of proxy
+                           URLs (mode=proxy). Use without a value for default.
+  --no-proxy-check         Skip proxy health-checking (faster startup, may
+                           use dead proxies)
+  --tor-socks-port PORT    Tor SOCKS5 port (default: 9050)
   --tor-control-port PORT  Tor control port (default: 9051)
-  --tor-password PWD     Tor control password (optional)
-  -o, --output DIR       Output directory (default: current directory)
-  -w, --workers N        Max concurrent downloads (default: 3, max: 40)
-  --no-primary           Don't rewrite download2.vimm.net to download.vimm.net
-  -v, --verbose          Show debug logs
-  --version              Show version
+  --tor-password PWD       Tor control password (optional)
+  -o, --output DIR         Output directory (default: current directory)
+  -w, --workers N          Max concurrent downloads (default: 3, max: 40)
+  --no-primary             Don't rewrite download2.vimm.net to download.vimm.net
+  -v, --verbose            Show debug logs
+  --version                Show version
 
 Search subcommand:
   <console>              Console name or code (use "consoles" to list)
