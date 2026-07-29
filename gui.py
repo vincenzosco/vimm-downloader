@@ -217,7 +217,7 @@ class DownloadCard(ttk.Frame):
                                       foreground=TEXT_PRIMARY)
         self._name_label.pack(side="left")
 
-        self._status_label = ttk.Label(top, text="⏳ Queued", font=("Segoe UI", 9),
+        self._status_label = ttk.Label(top, text="Queued", font=("Segoe UI", 9),
                                         foreground=TEXT_SECONDARY)
         self._status_label.pack(side="right")
 
@@ -262,19 +262,19 @@ class DownloadCard(ttk.Frame):
         self.status = "done"
         self._progress["value"] = 100
         self._pct_label["text"] = "100%"
-        self._status_label["text"] = f"✅ Done ({elapsed:.1f}s)"
+        self._status_label["text"] = f"Done ({elapsed:.1f}s)"
         self._status_label["foreground"] = SUCCESS
 
     def mark_failed(self, reason: str = "Failed"):
         """Mark download as failed."""
         self.status = "failed"
-        self._status_label["text"] = f"❌ {reason}"
+        self._status_label["text"] = f"ERR {reason}"
         self._status_label["foreground"] = ERROR
 
     def mark_running(self):
         """Mark download as in progress."""
         self.status = "running"
-        self._status_label["text"] = "⬇️ Downloading..."
+        self._status_label["text"] = "Downloading..."
         self._status_label["foreground"] = ACCENT
 
 
@@ -374,7 +374,7 @@ class VimmBulkGUI:
         # Header
         header = ttk.Frame(main)
         header.pack(fill="x", pady=(0, 8))
-        ttk.Label(header, text=f"⬇️  Vimm Bulk Downloader",
+        ttk.Label(header, text=f"Vimm Bulk Downloader",
                   font=("Segoe UI", 16, "bold"), foreground=ACCENT).pack(side="left")
         ttk.Label(header, text=f"v{__version__}",
                   font=("Segoe UI", 9), foreground=TEXT_SECONDARY).pack(side="left", padx=(6, 0))
@@ -393,7 +393,7 @@ class VimmBulkGUI:
 
     def _build_search_tab(self):
         tab = ttk.Frame(self.notebook, padding=12)
-        self.notebook.add(tab, text="🔍  Search")
+        self.notebook.add(tab, text="Search")
 
         # --- Controls row ---
         controls = ttk.Frame(tab)
@@ -420,7 +420,7 @@ class VimmBulkGUI:
         self.search_entry.pack(side="left", padx=(4, 8))
         self.search_entry.bind("<Return>", lambda e: self._do_search())
 
-        self.search_btn = ttk.Button(controls, text="🔎  Search",
+        self.search_btn = ttk.Button(controls, text="Search",
                                       style="Accent.TButton",
                                       command=self._do_search)
         self.search_btn.pack(side="left")
@@ -465,7 +465,7 @@ class VimmBulkGUI:
             return
 
         self.search_btn["state"] = "disabled"
-        self.search_btn["text"] = "⏳ Searching..."
+        self.search_btn["text"] = "Searching..."
         self.status_label["text"] = f"Searching for '{query}' on {console_name}..."
 
         def search_thread():
@@ -480,10 +480,10 @@ class VimmBulkGUI:
     def _on_search_done(self, resp):
         """Handle search results on main thread."""
         self.search_btn["state"] = "normal"
-        self.search_btn["text"] = "🔎  Search"
+        self.search_btn["text"] = "Search"
 
         if resp.error:
-            self.status_label["text"] = f"❌ Search error: {resp.error}"
+            self.status_label["text"] = f"Search error: {resp.error}"
             return
 
         if resp.total == 0:
@@ -496,8 +496,8 @@ class VimmBulkGUI:
 
     def _on_search_error(self, error: str):
         self.search_btn["state"] = "normal"
-        self.search_btn["text"] = "🔎  Search"
-        self.status_label["text"] = f"❌ Search failed: {error}"
+        self.search_btn["text"] = "Search"
+        self.status_label["text"] = f"Search failed: {error}"
 
     def _on_result_select(self, result: Optional[dict]):
         """Update selection info and button state."""
@@ -529,7 +529,7 @@ class VimmBulkGUI:
             if self._add_to_queue(r.vault_url, r.title, silent=True):
                 count += 1
         self._refresh_queue_display()
-        self.status_label["text"] = f"✅ Added {count} game(s) to download queue."
+        self.status_label["text"] = f"Added {count} game(s) to download queue."
 
     def _add_to_queue(self, vault_url: str, title: str, silent: bool = False) -> bool:
         """Add a game to the download queue if not already present."""
@@ -552,7 +552,7 @@ class VimmBulkGUI:
         })
         if not silent:
             self._refresh_queue_display()
-            self.status_label["text"] = f"✅ Added '{title}' to queue."
+            self.status_label["text"] = f"Added '{title}' to queue."
         return True
 
     # -----------------------------------------------------------------------
@@ -561,7 +561,7 @@ class VimmBulkGUI:
 
     def _build_downloads_tab(self):
         tab = ttk.Frame(self.notebook, padding=12)
-        self.notebook.add(tab, text="⬇️  Downloads")
+        self.notebook.add(tab, text="Downloads")
 
         # --- Top bar ---
         top = ttk.Frame(tab)
@@ -576,16 +576,16 @@ class VimmBulkGUI:
         self.queue_count_label.pack(side="left", padx=(8, 0))
 
         # Action buttons
-        self.start_all_btn = ttk.Button(top, text="▶  Start All",
+        self.start_all_btn = ttk.Button(top, text="Start All",
                                          style="Accent.TButton",
                                          command=self._start_all_downloads)
         self.start_all_btn.pack(side="right", padx=(4, 0))
 
-        self.clear_btn = ttk.Button(top, text="🗑  Clear Done",
+        self.clear_btn = ttk.Button(top, text="Clear Done",
                                      command=self._clear_done)
         self.clear_btn.pack(side="right", padx=(4, 0))
 
-        self.download_format_btn = ttk.Button(top, text="➕ URL",
+        self.download_format_btn = ttk.Button(top, text="+ URL",
                                                command=self._add_url_dialog)
         self.download_format_btn.pack(side="right", padx=(4, 0))
 
@@ -671,7 +671,7 @@ class VimmBulkGUI:
                     if self._add_to_queue(url, f"vault_{vault_id}", silent=True):
                         count += 1
             self._refresh_queue_display()
-            self.dl_status["text"] = f"✅ Added {count} URL(s) to queue."
+            self.dl_status["text"] = f"Added {count} URL(s) to queue."
             dialog.destroy()
 
         ttk.Button(dialog, text="Add to Queue", style="Accent.TButton",
@@ -748,7 +748,7 @@ class VimmBulkGUI:
             if not card:
                 continue
             card.mark_running()
-            card.update_progress(0, None, status_text="🔍 Resolving...")
+            card.update_progress(0, None, status_text="Resolving...")
 
             try:
                 dl_url = extract_download_url(
@@ -772,7 +772,7 @@ class VimmBulkGUI:
             )
             if not ok:
                 def _on_tor_auto_fail():
-                    self.dl_status["text"] = "❌ Tor failed to start. Check Settings tab."
+                    self.dl_status["text"] = "Tor failed to start. Check Settings tab."
                     self.start_all_btn["state"] = "normal"
                 self.root.after(0, _on_tor_auto_fail)
                 return
@@ -882,7 +882,7 @@ class VimmBulkGUI:
                         fh.close()
                         os.remove(output_path)
                         card.status = "queued"
-                        card._status_label["text"] = "⏸ Stopped"
+                        card._status_label["text"] = "Stopped"
                         return
 
                     if chunk:
@@ -944,7 +944,7 @@ class VimmBulkGUI:
     def _on_downloads_complete(self):
         """Called when all downloads finish."""
         self.start_all_btn["state"] = "normal"
-        self.dl_status["text"] = "✅ All downloads complete!"
+        self.dl_status["text"] = "All downloads complete!"
         self._refresh_queue_display()
 
     def _clear_done(self):
@@ -961,7 +961,7 @@ class VimmBulkGUI:
 
     def _build_settings_tab(self):
         tab = ttk.Frame(self.notebook, padding=12)
-        self.notebook.add(tab, text="⚙  Settings")
+        self.notebook.add(tab, text="Settings")
 
         # --- Mode ---
         mode_frame = ttk.LabelFrame(tab, text="IP Rotation", padding=12)
@@ -1038,7 +1038,7 @@ class VimmBulkGUI:
         # --- Buttons ---
         btn_frame = ttk.Frame(tab)
         btn_frame.pack(fill="x", pady=(8, 0))
-        ttk.Button(btn_frame, text="💾 Save Settings",
+        ttk.Button(btn_frame, text="Save Settings",
                     style="Accent.TButton",
                     command=self._save_settings).pack(side="left")
         ttk.Button(btn_frame, text="Open Output Folder",
@@ -1086,7 +1086,7 @@ class VimmBulkGUI:
     def _test_tor(self):
         """Test Tor connectivity.  Auto-start / install if needed."""
         self.tor_check_btn["state"] = "disabled"
-        self.tor_check_btn["text"] = "⏳ Setting up Tor..."
+        self.tor_check_btn["text"] = "Setting up Tor..."
         self.settings_status["text"] = "Checking Tor..."
 
         def test():
@@ -1110,11 +1110,11 @@ class VimmBulkGUI:
     def _on_tor_test(self, success: bool):
         self.tor_check_btn["state"] = "normal"
         if success:
-            self.tor_check_btn["text"] = "✅ Tor is working!"
+            self.tor_check_btn["text"] = "Tor is working!"
             self.settings_status["text"] = "Tor detected and working."
             self.settings_status["foreground"] = SUCCESS
         else:
-            self.tor_check_btn["text"] = "❌ Tor not available"
+            self.tor_check_btn["text"] = "Tor not available"
             self.settings_status["text"] = (
                 "Tor not reachable.  Install it manually:\n"
                 "  brew install tor"
@@ -1123,7 +1123,7 @@ class VimmBulkGUI:
 
     def _on_tor_test_error(self, error: str):
         self.tor_check_btn["state"] = "normal"
-        self.tor_check_btn["text"] = "❌ Error"
+        self.tor_check_btn["text"] = "Error"
         self.settings_status["text"] = f"Tor test error: {error}"
 
     def _save_settings(self):
@@ -1137,10 +1137,10 @@ class VimmBulkGUI:
             self.config["workers"] = int(self.workers_var.get())
             self.config["download_format"] = self.format_var.get()
             save_config(self.config)
-            self.settings_status["text"] = "✅ Settings saved successfully!"
+            self.settings_status["text"] = "Settings saved successfully!"
             self.settings_status["foreground"] = SUCCESS
         except ValueError as e:
-            self.settings_status["text"] = f"❌ Invalid value: {e}"
+            self.settings_status["text"] = f"Invalid value: {e}"
             self.settings_status["foreground"] = ERROR
 
     def _open_output(self):

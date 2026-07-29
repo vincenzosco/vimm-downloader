@@ -126,7 +126,7 @@ def _check_tor(args: dict):
 
     print(f"{Fore.CYAN}Checking Tor ...{Style.RESET_ALL}")
     if detect_tor():
-        print(f"  {Fore.GREEN}✓ Tor SOCKS proxy reachable{Style.RESET_ALL}")
+        print(f"  {Fore.GREEN}OK Tor SOCKS proxy reachable{Style.RESET_ALL}")
         # Warn if the control port is not accessible (rotation will fail)
         import socket
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -135,7 +135,7 @@ def _check_tor(args: dict):
             result = sock.connect_ex(("127.0.0.1", ctrl_port))
             if result != 0:
                 print(
-                    f"  {Fore.YELLOW}⚠ ControlPort :{ctrl_port} not reachable —"
+                    f"  {Fore.YELLOW}! ControlPort :{ctrl_port} not reachable —"
                     f" IP rotation will be skipped{Style.RESET_ALL}"
                 )
                 print(
@@ -152,9 +152,9 @@ def _check_tor(args: dict):
         interactive_install=True,
     )
     if ok:
-        print(f"  {Fore.GREEN}✓ Tor is ready{Style.RESET_ALL}")
+        print(f"  {Fore.GREEN}OK Tor is ready{Style.RESET_ALL}")
     else:
-        print(f"  {Fore.RED}✗ Could not start Tor.  Check your setup.{Style.RESET_ALL}")
+        print(f"  {Fore.RED}ERR Could not start Tor.  Check your setup.{Style.RESET_ALL}")
         proceed = input("    Continue anyway? [Y/n]: ").strip().lower()
         if proceed == "n":
             sys.exit(1)
@@ -209,7 +209,7 @@ def _run_download(args: dict):
             f"{Style.RESET_ALL}"
         )
         for u in invalid_urls:
-            print(f"  {Fore.YELLOW}✗{Style.RESET_ALL} {u}")
+            print(f"  {Fore.YELLOW}ERR{Style.RESET_ALL} {u}")
 
     if not valid_urls:
         print(f"{Fore.RED}Error: no valid vault URLs provided.{Style.RESET_ALL}")
@@ -344,7 +344,7 @@ def _do_search(args: list[str]):
     console = Console()
 
     print()
-    console.rule("[bold cyan]🔎 Vimm\'s Lair — Search[/]")
+    console.rule("[bold cyan]== Vimm\'s Lair — Search[/]")
     console.print(f"  Console: [white]{console_name}[/]")
     console.print(f"  Query:   [white]{query}[/]")
     console.print()
@@ -364,7 +364,7 @@ def _do_list_consoles():
 
     console = Console()
     console.print()
-    console.rule("[bold cyan]🎮 Available Consoles[/]")
+    console.rule("[bold cyan]== Available Consoles[/]")
     console.print()
 
     table = Table(box=None, padding=(0, 2))

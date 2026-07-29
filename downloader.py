@@ -215,12 +215,12 @@ def _worker_task(
     start = time.time()
 
     # --- Rotate IP before this download ---
-    progress.update(task_id, description=f"🔄 {job.short_name}")
+    progress.update(task_id, description=f"(ROTATE) {job.short_name}")
     if not rotator.rotate():
         # Warn but continue — the current proxy/IP still works
         progress.update(
             task_id,
-            description=f"[yellow]⚠ {job.short_name} — rotation failed, continuing with current IP[/]",
+            description=f"[yellow]! {job.short_name} — rotation failed, continuing with current IP[/]",
         )
         logger.warning(
             "IP rotation failed for %s — continuing with current proxy",
@@ -242,7 +242,7 @@ def _worker_task(
 
     progress.update(
         task_id,
-        description=f"[cyan]⬇️[/] {job.short_name} [[dim]{display_proxy}[/]]",
+        description=f"[cyan](DL)[/] {job.short_name} [[dim]{display_proxy}[/]]",
     )
 
     # --- Resolve output filename ---
@@ -260,12 +260,12 @@ def _worker_task(
     if success:
         progress.update(
             task_id,
-            description=f"[green]✅[/] {os.path.basename(output_path)}",
+            description=f"[green](OK)[/] {os.path.basename(output_path)}",
         )
     else:
         progress.update(
             task_id,
-            description=f"[red]❌ {job.short_name} — download failed[/]",
+            description=f"[red](ERR) {job.short_name} — download failed[/]",
         )
 
     progress.stop_task(task_id)  # stop spinner for both success & failure
@@ -334,7 +334,7 @@ def download_all(
     # Phase 1: Scrape all vault pages for download URLs
     # ------------------------------------------------------------------
     console.print()
-    console.rule("[bold cyan]🔍 Phase 1/2: Resolving download URLs[/]")
+    console.rule("[bold cyan]== Phase 1/2: Resolving download URLs[/]")
     console.print()
 
     download_urls: list[tuple[str, str]] = []  # (vault_url, dl_url)
@@ -353,9 +353,9 @@ def download_all(
                 prefer_primary=prefer_primary,
             )
             download_urls.append((vault_url, dl_url))
-            console.print("[green]✓[/]")
+            console.print("[green]OK[/]")
         except VimmScraperError as e:
-            console.print(f"[red]✗ {e}[/]")
+            console.print(f"[red]ERR {e}[/]")
     scrape_session.close()
 
     if not download_urls:
@@ -365,24 +365,24 @@ def download_all(
     resolve_count = len(download_urls)
     total_count = len(vault_urls)
     if resolve_count == total_count:
-        console.print(f"\n[green]✓ All {resolve_count} URLs resolved successfully![/]")
+        console.print(f"\n[green]OK All {resolve_count} URLs resolved successfully![/]")
     else:
         console.print(
-            f"\n[yellow]✓ Resolved {resolve_count}/{total_count}[/]"
+            f"\n[yellow]Resolved {resolve_count}/{total_count}[/]"
         )
 
     # ------------------------------------------------------------------
     # Phase 2: Download files concurrently with Rich progress bars
     # ------------------------------------------------------------------
     console.print()
-    console.rule("[bold cyan]⬇️  Phase 2/2: Downloading with IP rotation[/]")
+    console.rule("[bold cyan]== Phase 2/2: Downloading with IP rotation[/]")
     console.print()
 
     # Tor mode safety check
     effective_workers = max_workers
     if isinstance(rotator, TorRotator) and max_workers > 1:
         console.print(
-            "[yellow]⚠ Tor mode: forcing 1 concurrent worker[/]\n"
+            "[yellow]! Tor mode: forcing 1 concurrent worker[/]\n"
             "    [dim]NEWNYM changes the Tor circuit globally — "
             "concurrent downloads would interfere.[/]\n"
             "    To download truly in parallel, use [cyan]--mode proxy[/] "
@@ -423,7 +423,7 @@ def download_all(
         task_ids: list[TaskID] = []
         for job in jobs:
             task_id = progress.add_task(
-                description=f"[dim]⏳ {job.short_name}[/]",
+                description=f"[dim]WAIT {job.short_name}[/]",
                 total=None,   # unknown until we get Content-Length
             )
             task_ids.append(task_id)
@@ -443,7 +443,7 @@ def download_all(
     # Summary table
     # ------------------------------------------------------------------
     console.print()
-    console.rule("[bold cyan]📊 Download Summary[/]")
+    console.rule("[bold cyan]== Download Summary[/]")
 
     successes = [r for r in results if r.success]
     failures = [r for r in results if not r.success]
@@ -456,14 +456,14 @@ def download_all(
 
     for r in successes:
         table.add_row(
-            "[green]✓[/]",
+            "[green]OK[/]",
             os.path.basename(r.filename or ""),
             _format_size(r.bytes_downloaded),
             f"{r.elapsed_seconds:.1f}s",
         )
     for r in failures:
         table.add_row(
-            "[red]✗[/]",
+            "[red]ERR[/]",
             r.vault_url,
             "—",
             f"{r.elapsed_seconds:.1f}s",

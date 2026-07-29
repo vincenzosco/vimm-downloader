@@ -211,7 +211,7 @@ def _visible_link_href(cell) -> tuple:
 def render_results(resp: SearchResponse, console: Console) -> None:
     """Print search results to the given Rich console."""
     if resp.error:
-        console.print(f"\n[red]✗ Search failed:[/] {resp.error}")
+        console.print(f"\n[red]ERR Search failed:[/] {resp.error}")
         return
 
     if resp.total == 0:
@@ -224,7 +224,7 @@ def render_results(resp: SearchResponse, console: Console) -> None:
     # Title
     console.print()
     console.rule(
-        f"[bold cyan]🔍 Results for[/] "
+        f"[bold cyan]== Results for[/] "
         f"[white]'{resp.query}'[/] "
         f"on [white]{resp.console_name or 'all consoles'}[/] "
         f"[dim]({resp.total} found)[/]"
