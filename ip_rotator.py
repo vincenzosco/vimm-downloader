@@ -45,6 +45,17 @@ PROXIFLY_URLS = {
     "https":  f"{PROXIFLY_CDN_BASE}/protocols/https/data.txt",
 }
 
+# ---------------------------------------------------------------------------
+# RoundProxies free proxy API
+# Returns JSON with ip / port / protocols fields
+# Source: https://roundproxies.com
+# ---------------------------------------------------------------------------
+
+ROUNDPROXIES_URL = (
+    "https://roundproxies.com/api/get-free-proxies"
+    "?limit=100&page=1&sort_by=lastChecked&sort_type=desc"
+)
+
 
 # ---------------------------------------------------------------------------
 # Abstract base
@@ -234,6 +245,8 @@ class ProxyRotator(IPRotator):
     def from_url(cls, url: str, check: bool = True) -> "ProxyRotator":
         """Fetch proxies from a remote URL (e.g., free proxy API).
 
+        Expects plain text: one ``ip:port`` per line.
+
         Args:
             url: URL to fetch proxy list from.
             check: If True, health-check proxies before returning.
@@ -258,6 +271,148 @@ class ProxyRotator(IPRotator):
         except requests.RequestException as e:
             raise ValueError(f"Failed to fetch proxies from {url}: {e}") from e
 
+    @classmethod
+    def from_json_url(cls, url: str, check: bool = True) -> "ProxyRotator":
+        """Fetch proxies from a JSON API (e.g., roundproxies.com).
+
+        Expects JSON with a ``data`` array where each entry has:
+          - ``ip`` (string)
+          - ``port`` (string)
+          - ``protocols`` (list of strings, e.g. ``["socks5"]``)
+
+        Proxies are formatted as ``protocol://ip:port``.
+
+        Args:
+            url: URL to fetch proxy list from.
+            check: If True, health-check proxies before returning.
+        """
+        try:
+            resp = requests.get(url, timeout=15)
+            resp.raise_for_status()
+        except requests.RequestException as e:
+            raise ValueError(f"Failed to fetch proxies from {url}: {e}") from e
+
+        try:
+            data = resp.json()
+        except ValueError as e:
+            raise ValueError(f"Failed to parse JSON from {url}: {e}") from e
+
+        proxies: list[str] = []
+        for entry in data.get("data", []):
+            ip = entry.get("ip", "")
+            port = entry.get("port", "")
+            protocols = entry.get("protocols", [])
+            if not ip or not port:
+                continue
+            proto = protocols[0] if protocols else "socks5"
+            proxies.append(f"{proto}://{ip}:{port}")
+
+        if not proxies:
+            raise ValueError(f"No proxies found in JSON response from {url}")
+
+        if check:
+            proxies = check_proxies(proxies)
+
+        if not proxies:
+            raise ValueError(
+                "All fetched proxies failed the health check — "
+                "no working proxies available.\n"
+                "    Try --no-proxy-check to skip health checking, "
+                "or use a different proxy source."
+            )
+
+        return cls(proxy_list=proxies)
+
+    @classmethod
+    def from_default_sources(cls, check: bool = True) -> "ProxyRotator":
+        """Fetch proxies from all default free sources and merge them.
+
+        Currently fetches from:
+          - Proxifly free-proxy-list CDN (SOCKS5, text format)
+          - RoundProxies free proxy API (JSON, any protocol)
+
+        The lists are merged together, deduplicated, and health-checked
+        as a single pool.
+
+        Args:
+            check: If True, health-check the combined proxy list.
+        """
+        combined: list[str] = []
+        errors: list[str] = []
+
+        # --- Fetch from Proxifly CDN (text format) ---
+        try:
+            resp = requests.get(PROXIFLY_URLS["socks5"], timeout=15)
+            resp.raise_for_status()
+            proxifly_proxies = [
+                line.strip()
+                for line in resp.text.strip().splitlines()
+                if line.strip()
+            ]
+            logger.info("Fetched %d proxies from Proxifly CDN", len(proxifly_proxies))
+            combined.extend(proxifly_proxies)
+        except requests.RequestException as e:
+            msg = f"Proxifly CDN: {e}"
+            logger.warning(msg)
+            errors.append(msg)
+
+        # --- Fetch from RoundProxies API (JSON format) ---
+        try:
+            resp = requests.get(ROUNDPROXIES_URL, timeout=15)
+            resp.raise_for_status()
+            data = resp.json()
+            round_count = 0
+            for entry in data.get("data", []):
+                ip = entry.get("ip", "")
+                port = entry.get("port", "")
+                protocols = entry.get("protocols", [])
+                if not ip or not port:
+                    continue
+                proto = protocols[0] if protocols else "socks5"
+                combined.append(f"{proto}://{ip}:{port}")
+                round_count += 1
+            logger.info("Fetched %d proxies from RoundProxies", round_count)
+        except (requests.RequestException, ValueError) as e:
+            msg = f"RoundProxies: {e}"
+            logger.warning(msg)
+            errors.append(msg)
+
+        if not combined:
+            raise ValueError(
+                "All default proxy sources failed:\n"
+                + "\n".join(f"  - {e}" for e in errors)
+                + "\n    Fall back to --proxy-file with a custom list."
+            )
+
+        # Deduplicate by IP:port (not protocol, since a proxy may support multiple)
+        seen = set()
+        deduped = []
+        for p in combined:
+            # Normalise: strip protocol prefix for dedup key
+            key = p.split("://", 1)[-1] if "://" in p else p
+            if key not in seen:
+                seen.add(key)
+                deduped.append(p)
+
+        logger.info(
+            "Combined proxy pool: %d unique proxies (%d from sources)",
+            len(deduped), len(combined),
+        )
+
+        # Health-check the entire merged pool together
+        if check:
+            deduped = check_proxies(deduped)
+
+        if not deduped:
+            raise ValueError(
+                "All proxies from default sources failed the health check — "
+                "no working proxies available.\n"
+                "    Try --no-proxy-check to skip health checking, "
+                "or use --proxy-file with a custom list."
+            )
+
+        return cls(proxy_list=deduped)
+
 
 # ---------------------------------------------------------------------------
 # Factory
@@ -279,15 +434,11 @@ def create_rotator(
         An IPRotator instance.
     """
     if isinstance(proxy_list, str) and proxy_list == "default":
-        # Fetch fresh proxies from the Proxifly free-proxy-list CDN
-        logger.info("Fetching fresh proxies from Proxifly free-proxy-list CDN ...")
-        try:
-            return ProxyRotator.from_url(PROXIFLY_URLS["socks5"], check=proxy_check)
-        except ValueError as e:
-            raise ValueError(
-                f"Failed to fetch default proxy pool: {e}\n"
-                "    Fall back to --proxy-file with a custom list."
-            ) from e
+        # Fetch fresh proxies from all default free sources and merge them
+        logger.info(
+            "Fetching fresh proxies from Proxifly CDN + RoundProxies ..."
+        )
+        return ProxyRotator.from_default_sources(check=proxy_check)
     elif isinstance(proxy_list, list):
         proxies = check_proxies(proxy_list) if proxy_check else proxy_list
         if not proxies:

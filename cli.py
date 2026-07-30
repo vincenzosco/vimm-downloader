@@ -68,7 +68,8 @@ def _add_shared_download_args(parser):
         nargs="?",
         const="default",
         default=None,
-        help="Proxy source: 'default' to fetch free proxies from Proxifly CDN, "
+        help="Proxy source: 'default' to fetch free proxies from "
+             "Proxifly CDN + RoundProxies, "
              "or a comma-separated list of proxy URLs",
     )
     parser.add_argument(
@@ -129,7 +130,7 @@ def _ensure_rotator(args: dict):
         )
 
         if proxy_list_val == "default":
-            print(f"  {Fore.GREEN}OK Fetched fresh proxies from Proxifly CDN{Style.RESET_ALL}")
+            print(f"  {Fore.GREEN}OK Fetched fresh proxies from Proxifly + RoundProxies{Style.RESET_ALL}")
         elif proxy_list_val and proxy_list_val != "default":
             print(f"  {Fore.GREEN}OK {rotator.name()}{Style.RESET_ALL}")
 
