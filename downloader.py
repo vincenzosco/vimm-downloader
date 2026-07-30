@@ -44,6 +44,7 @@ colorama_init(autoreset=True)
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_WORKERS = 3
+DEFAULT_RETRIES = 3
 DEFAULT_OUTPUT_DIR = "."
 
 # Semaphore allowing at most 1 direct-connection (own IP) download at a time,
@@ -286,107 +287,132 @@ def _worker_task(
     rotator: IPRotator,
     progress: Progress,
     task_id: TaskID,
+    max_retries: int = DEFAULT_RETRIES,
 ) -> DownloadResult:
     """Run by a single worker thread -- rotate IP, resolve filename, download.
+
+    If a download fails, it is automatically retried with a fresh proxy up to
+    *max_retries* times.  Each retry rotates to the next proxy in the pool.
 
     Updates the Rich progress task throughout.
     """
     start = time.time()
-
-    # --- Rotate IP before this download ---
-    progress.update(task_id, description=f"(ROTATE) {job.short_name}")
-    if not rotator.rotate():
-        # Warn but continue -- the current proxy/IP still works
-        progress.update(
-            task_id,
-            description=f"[yellow]! {job.short_name} -- rotation failed, continuing with current IP[/]",
-        )
-        logger.warning(
-            "IP rotation failed for %s -- continuing with current proxy",
-            job.vault_url,
-        )
-
-    # --- Create session ---
-    session = _make_session(rotator)
-    proxies = rotator.get_proxies()
-    proxy_str = proxies.get("http", "direct") if proxies else "direct"
-
-    # Shorten proxy string for display
-    display_proxy = proxy_str
-    if "@" in proxy_str:
-        # Show just host:port, hide credentials
-        display_proxy = proxy_str.split("@")[-1]
-    if len(display_proxy) > 40:
-        display_proxy = display_proxy[:37] + "..."
-
-    progress.update(
-        task_id,
-        description=f"[cyan](DL)[/] {job.short_name} [[dim]{display_proxy}[/]]",
-    )
-
-    # --- Resolve output filename ---
     vault_id = job.vault_url.rstrip("/").split("/")[-1]
+
+    # --- Resolve output filename (once, stays the same across retries) ---
+    session = _make_session(rotator)
     output_path = _resolve_filename(session, job.download_url, vault_id, job.output_dir)
-
-    # --- Check for partial download to resume ---
+    session.close()
     part_path = _get_part_path(output_path)
-    resume_bytes = _check_resume(session, job.download_url, part_path)
-    if resume_bytes > 0:
-        progress.update(
-            task_id,
-            description=f"[yellow](RESUME)[/] {job.short_name} ({_format_size(resume_bytes)} already downloaded)[/]",
-        )
-        logger.info("Resuming %s: %d bytes already on disk", job.short_name, resume_bytes)
 
-    # --- Download with real-time progress (to .part file) ---
-    success, bytes_written = _stream_download(
-        session, job.download_url, part_path, progress, task_id,
-        resume_bytes=resume_bytes,
-    )
+    success = False
+    bytes_written = 0
+    final_session = None
 
-    # --- Failsafe: if proxy download failed, retry with direct connection ---
-    if not success and proxies:
-        # Only one direct download at a time (vimm's 1-per-IP limit)
-        actual_bytes = os.path.getsize(part_path) if os.path.isfile(part_path) else 0
-        logger.info(
-            "Proxy download failed for %s -- retrying with direct connection "
-            "(%d bytes on disk, waiting for direct-download slot)",
-            job.short_name, actual_bytes,
-        )
-        progress.update(
-            task_id,
-            description=f"[yellow](FALLBACK direct)[/] {job.short_name} [{_format_size(actual_bytes)} on disk]",
-        )
-        _DIRECT_FALLBACK_LOCK.acquire()  # blocks until slot is free
-        direct_session = None
-        try:
-            # Create a session WITHOUT any proxy
-            direct_session = requests.Session()
-            direct_session.headers.update({
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:123.0) Gecko/20100101 Firefox/123.0",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-                "Accept-Language": "en-US,en;q=0.5",
-                "Referer": "https://vimm.net/vault/",
-                "Cookie": "counted=1",
-            })
+    for attempt in range(1, max_retries + 1):
+        if attempt > 1:
+            # Show retry status on progress bar
             progress.update(
                 task_id,
-                description=f"[yellow](FALLBACK direct)[/] {job.short_name} [[dim]direct[/]]",
+                description=f"[yellow](RETRY {attempt}/{max_retries})[/] {job.short_name}",
             )
-            success, bytes_written = _stream_download(
-                direct_session, job.download_url, part_path, progress, task_id,
-                resume_bytes=actual_bytes,
+
+        # --- Rotate IP for this attempt ---
+        progress.update(task_id, description=f"(ROTATE) {job.short_name}")
+        rotator.rotate()
+
+        # --- Create session with current proxy ---
+        session = _make_session(rotator)
+        proxies = rotator.get_proxies()
+        proxy_str = proxies.get("http", "direct") if proxies else "direct"
+
+        # Shorten proxy string for display
+        display_proxy = proxy_str
+        if "@" in proxy_str:
+            display_proxy = proxy_str.split("@")[-1]
+        if len(display_proxy) > 40:
+            display_proxy = display_proxy[:37] + "..."
+
+        progress.update(
+            task_id,
+            description=f"[cyan](DL)[/] {job.short_name} [[dim]{display_proxy}[/]]",
+        )
+
+        # --- Check for partial download to resume ---
+        resume_bytes = _check_resume(session, job.download_url, part_path)
+        if resume_bytes > 0:
+            progress.update(
+                task_id,
+                description=f"[yellow](RESUME)[/] {job.short_name} ({_format_size(resume_bytes)} already downloaded)[/]",
             )
-            if success:
-                logger.info("Direct fallback succeeded for %s", job.short_name)
-        finally:
-            _DIRECT_FALLBACK_LOCK.release()
-            if direct_session is not None:
-                direct_session.close()
+            logger.info("Resuming %s: %d bytes already on disk", job.short_name, resume_bytes)
+
+        # --- Download with real-time progress (to .part file) ---
+        success, bytes_written = _stream_download(
+            session, job.download_url, part_path, progress, task_id,
+            resume_bytes=resume_bytes,
+        )
+
+        if success:
+            final_session = session
+            break
+
+        # --- Failsafe: if proxy download failed, retry with direct connection ---
+        if proxies:
+            # Only one direct download at a time (vimm's 1-per-IP limit)
+            actual_bytes = os.path.getsize(part_path) if os.path.isfile(part_path) else 0
+            logger.info(
+                "Proxy download failed for %s -- retrying with direct connection "
+                "(%d bytes on disk)",
+                job.short_name, actual_bytes,
+            )
+            progress.update(
+                task_id,
+                description=f"[yellow](FALLBACK direct)[/] {job.short_name} [{_format_size(actual_bytes)} on disk]",
+            )
+            _DIRECT_FALLBACK_LOCK.acquire()  # blocks until slot is free
+            direct_session = None
+            try:
+                direct_session = requests.Session()
+                direct_session.headers.update({
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:123.0) Gecko/20100101 Firefox/123.0",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                    "Accept-Language": "en-US,en;q=0.5",
+                    "Referer": "https://vimm.net/vault/",
+                    "Cookie": "counted=1",
+                })
+                progress.update(
+                    task_id,
+                    description=f"[yellow](FALLBACK direct)[/] {job.short_name} [[dim]direct[/]]",
+                )
+                retry_success, fallback_bytes = _stream_download(
+                    direct_session, job.download_url, part_path, progress, task_id,
+                    resume_bytes=actual_bytes,
+                )
+                if retry_success:
+                    success = True
+                    bytes_written = fallback_bytes
+                    final_session = session
+                    logger.info("Direct fallback succeeded for %s", job.short_name)
+            finally:
+                _DIRECT_FALLBACK_LOCK.release()
+                if direct_session is not None:
+                    direct_session.close()
+
+        if success:
+            break
+
+        # --- Not successful yet, close session and retry with a different proxy ---
+        session.close()
+        if attempt < max_retries:
+            logger.info(
+                "Retry %d/%d for %s with a different proxy...",
+                attempt, max_retries, job.short_name,
+            )
 
     elapsed = time.time() - start
 
-    if success:
+    if success and final_session is not None:
         # Rename .part to final filename
         try:
             os.rename(part_path, output_path)
@@ -398,6 +424,7 @@ def _worker_task(
             task_id,
             description=f"[green](OK)[/] {os.path.basename(output_path)}",
         )
+        final_session.close()
     else:
         progress.update(
             task_id,
@@ -405,7 +432,6 @@ def _worker_task(
         )
         # Keep the .part file on disk for future resume attempts
 
-    session.close()
     progress.stop_task(task_id)
 
     return DownloadResult(
@@ -454,6 +480,7 @@ def download_all(
     output_dir: str = DEFAULT_OUTPUT_DIR,
     max_workers: int = DEFAULT_MAX_WORKERS,
     prefer_primary: bool = True,
+    max_retries: int = DEFAULT_RETRIES,
 ) -> list[DownloadResult]:
     """Scrape & download multiple games from vimm.net concurrently.
 
@@ -466,6 +493,7 @@ def download_all(
         output_dir: Where to save downloaded files.
         max_workers: How many concurrent downloads.
         prefer_primary: Use download.vimm.net instead of download2.vimm.net.
+        max_retries: How many times to retry a failed download with a fresh proxy.
 
     Returns:
         List of DownloadResult objects.
@@ -544,7 +572,7 @@ def download_all(
     results_lock = threading.Lock()
 
     def task_wrapper(job: DownloadJob, progress: Progress, task_id: TaskID):
-        result = _worker_task(job, rotator, progress, task_id)
+        result = _worker_task(job, rotator, progress, task_id, max_retries=max_retries)
         with results_lock:
             results.append(result)
 

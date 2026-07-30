@@ -28,7 +28,7 @@ from pathlib import Path
 from colorama import Fore, Style, init as colorama_init
 
 from . import __version__
-from .downloader import download_all, DEFAULT_MAX_WORKERS, DEFAULT_OUTPUT_DIR
+from .downloader import download_all, DEFAULT_MAX_WORKERS, DEFAULT_RETRIES, DEFAULT_OUTPUT_DIR
 from .ip_rotator import create_rotator
 from .vimm_scraper import validate_vault_url
 from .console_list import CONSOLE_TABLE
@@ -95,6 +95,11 @@ def _add_shared_download_args(parser):
         dest="dry_run",
         default=False,
         help="Fetch & check proxies, validate URLs, then exit without downloading",
+    )
+    parser.add_argument(
+        "--retries", "-r",
+        type=int, default=DEFAULT_RETRIES,
+        help=f"Max retry attempts per failed download (default: {DEFAULT_RETRIES})",
     )
     parser.add_argument(
         "--no-primary",
@@ -205,6 +210,7 @@ def _run_download(args: dict):
         output_dir=args["output"],
         max_workers=args["workers"],
         prefer_primary=not args["no_primary"],
+        max_retries=args.get("retries", DEFAULT_RETRIES),
     )
 
 
