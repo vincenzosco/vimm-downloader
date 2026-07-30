@@ -510,24 +510,48 @@ def download_all(
 
     download_urls: list[tuple[str, str]] = []  # (vault_url, dl_url)
 
-    scrape_session = requests.Session()
     for idx, vault_url in enumerate(vault_urls, 1):
-        console.print(
-            f"  [{idx}/{len(vault_urls)}] [dim]{vault_url}[/]",
-            end=" " * max(0, 4 - len(str(idx))),
-        )
-        try:
-            dl_url = extract_download_url(
-                vault_url,
-                session=scrape_session,
-                proxies=rotator.get_proxies(),
-                prefer_primary=prefer_primary,
-            )
-            download_urls.append((vault_url, dl_url))
-            console.print("[green]OK[/]")
-        except VimmScraperError as e:
-            console.print(f"[red]ERR {e}[/]")
-    scrape_session.close()
+        ok = False
+        for attempt in range(1, max_retries + 1):
+            # Rotate to a (new) proxy before each attempt
+            rotator.rotate()
+
+            if attempt == 1:
+                console.print(
+                    f"  [{idx}/{len(vault_urls)}] [dim]{vault_url}[/]",
+                    end=" " * max(0, 4 - len(str(idx))),
+                )
+            else:
+                console.print(
+                    f"  [{idx}/{len(vault_urls)}] [yellow]RETRY {attempt}/{max_retries}[/] [dim]{vault_url}[/]",
+                    end="",
+                )
+
+            # Fresh session per attempt -- stale state from a failed proxy
+            # (bad cookie, connection hang) won't carry over
+            scrape_session = requests.Session()
+            try:
+                dl_url = extract_download_url(
+                    vault_url,
+                    session=scrape_session,
+                    proxies=rotator.get_proxies(),
+                    prefer_primary=prefer_primary,
+                )
+                download_urls.append((vault_url, dl_url))
+                console.print("[green]OK[/]")
+                ok = True
+                break
+            except VimmScraperError as e:
+                if attempt == max_retries:
+                    console.print(f"[red]ERR ({max_retries} attempts) {e}[/]")
+                else:
+                    console.print(f"[red]FAIL attempt {attempt} — retrying...[/]")
+            finally:
+                scrape_session.close()
+
+        if not ok:
+            # Already printed ERR above; nothing more to do
+            pass
 
     if not download_urls:
         console.print("\n[red]No download URLs could be resolved. Nothing to do.[/]")
