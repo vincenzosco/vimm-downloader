@@ -300,6 +300,7 @@ class VimmBulkGUI:
         self._stop_flag = False
         self._progress_queue: queue.Queue = queue.Queue()
         self._rotator: Optional[IPRotator] = None
+        self._direct_fallback_lock = threading.Semaphore(1)  # only 1 direct download at a time
 
         # --- Styling ---
         self._setup_styles()
@@ -976,8 +977,94 @@ class VimmBulkGUI:
             _q(done=True, elapsed=elapsed, filename=str(output_path.name), bytes=written)
 
         except Exception as e:
-            _q(failed=True, reason=str(e)[:60])
-            # Keep .part file for future resume attempts (don't delete)
+            # Failsafe: if proxy download failed, retry with direct connection
+            if proxies and not isinstance(rotator, TorRotator):
+                _q(status_text="Proxy failed, retrying direct...")
+                logger.info(
+                    "Proxy download failed for %s — retrying with direct connection",
+                    item['vault_url'],
+                )
+                actual_bytes = part_path.stat().st_size if part_path.exists() else 0
+                _q(status_text=f"Direct fallback ({_format_size(actual_bytes)} on disk)")
+                self._direct_fallback_lock.acquire()  # only 1 direct download at a time
+                direct_session = None
+                try:
+                    direct_session = requests.Session()
+                    direct_session.headers.update({
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:123.0) Gecko/20100101 Firefox/123.0",
+                        "Referer": "https://vimm.net/vault/",
+                        "Cookie": "counted=1",
+                    })
+                    # Retry the full download logic (HEAD, resume check, stream)
+                    head = direct_session.head(dl_url, timeout=15)
+                    cd = head.headers.get("Content-Disposition", "")
+                    if "filename=" in cd:
+                        fname = cd.split("filename=")[-1].strip('" ')
+                        if fname:
+                            output_path = output_dir / fname
+                    part_path = Path(_get_part_path(str(output_path)))
+                    if output_path.exists():
+                        _q(done=True, elapsed=0)
+                        return
+                    resume_bytes = _check_resume(direct_session, dl_url, str(part_path))
+                    headers = {}
+                    if resume_bytes > 0:
+                        headers["Range"] = f"bytes={resume_bytes}-"
+                    resp = direct_session.get(dl_url, stream=True, timeout=60, headers=headers)
+                    resp.raise_for_status()
+                    total = None
+                    if resume_bytes > 0 and "Content-Range" in resp.headers:
+                        cr = resp.headers["Content-Range"]
+                        try:
+                            total = int(cr.split("/")[-1])
+                        except (ValueError, IndexError):
+                            total = None
+                    else:
+                        total = int(resp.headers.get("Content-Length", "0")) or None
+                    written = 0
+                    start_time = time.time()
+                    last_update = 0.0
+                    if total:
+                        _q(set_total=total, set_value=resume_bytes, mode="determinate")
+                    else:
+                        _q(set_total=None, set_value=0, mode="indeterminate")
+                    mode = "ab" if resume_bytes > 0 else "wb"
+                    with open(part_path, mode) as fh:
+                        for chunk in resp.iter_content(chunk_size=128 * 1024):
+                            if self._stop_flag:
+                                fh.close()
+                                part_path.unlink(missing_ok=True)
+                                card.status = "queued"
+                                _q(stopped=True)
+                                return
+                            if chunk:
+                                fh.write(chunk)
+                                written += len(chunk)
+                                now = time.time()
+                                if now - last_update > 0.15:
+                                    last_update = now
+                                    elapsed = now - start_time
+                                    speed = _format_size(int(written / elapsed)) + "/s" if elapsed > 0 else ""
+                                    total_sofar = resume_bytes + written
+                                    pct = (total_sofar / total * 100) if total else 0
+                                    _q(current=total_sofar, total=total, pct=pct, speed=speed)
+                    elapsed = time.time() - start_time
+                    try:
+                        part_path.rename(output_path)
+                    except OSError as exc:
+                        logger.warning("Could not rename .part file: %s", exc)
+                        output_path = part_path
+                    _q(done=True, elapsed=elapsed, filename=str(output_path.name), bytes=written)
+                    logger.info("Direct fallback succeeded for %s", item['vault_url'])
+                except Exception as direct_e:
+                    _q(failed=True, reason=str(direct_e)[:60])
+                finally:
+                    self._direct_fallback_lock.release()
+                    if direct_session is not None:
+                        direct_session.close()
+            else:
+                _q(failed=True, reason=str(e)[:60])
+                # Keep .part file for future resume attempts (don't delete)
         finally:
             session.close()
 

@@ -48,6 +48,10 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_WORKERS = 3
 DEFAULT_OUTPUT_DIR = "."
 
+# Semaphore allowing at most 1 direct-connection (own IP) download at a time,
+# used as a failsafe when proxy downloads fail.
+_DIRECT_FALLBACK_LOCK = threading.Semaphore(1)
+
 
 @dataclass
 class DownloadResult:
@@ -341,6 +345,46 @@ def _worker_task(
         session, job.download_url, part_path, progress, task_id,
         resume_bytes=resume_bytes,
     )
+
+    # --- Failsafe: if proxy download failed, retry with direct connection ---
+    if not success and not isinstance(rotator, TorRotator):
+        # Only one direct download at a time (vimm's 1-per-IP limit)
+        actual_bytes = os.path.getsize(part_path) if os.path.isfile(part_path) else 0
+        logger.info(
+            "Proxy download failed for %s — retrying with direct connection "
+            "(%d bytes on disk, waiting for direct-download slot)",
+            job.short_name, actual_bytes,
+        )
+        progress.update(
+            task_id,
+            description=f"[yellow](FALLBACK direct)[/] {job.short_name} [{_format_size(actual_bytes)} on disk]",
+        )
+        direct_session = None
+        _DIRECT_FALLBACK_LOCK.acquire()  # blocks until slot is free
+        try:
+            # Create a session WITHOUT any proxy
+            direct_session = requests.Session()
+            direct_session.headers.update({
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; rv:123.0) Gecko/20100101 Firefox/123.0",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.5",
+                "Referer": "https://vimm.net/vault/",
+                "Cookie": "counted=1",
+            })
+            progress.update(
+                task_id,
+                description=f"[yellow](FALLBACK direct)[/] {job.short_name} [[dim]direct[/]]",
+            )
+            success, bytes_written = _stream_download(
+                direct_session, job.download_url, part_path, progress, task_id,
+                resume_bytes=actual_bytes,
+            )
+            if success:
+                logger.info("Direct fallback succeeded for %s", job.short_name)
+        finally:
+            _DIRECT_FALLBACK_LOCK.release()
+            if direct_session is not None:
+                direct_session.close()
 
     elapsed = time.time() - start
 
