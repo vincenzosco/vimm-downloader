@@ -1,5 +1,11 @@
 # Vimm Bulk Downloader
 
+<p align="center">
+  <img src="https://img.shields.io/github/stars/vincenzosco/vimm-downloader?style=for-the-badge&logo=github&color=e94560" alt="GitHub stars">
+  <img src="https://img.shields.io/github/last-commit/vincenzosco/vimm-downloader?style=for-the-badge&logo=git&color=0f3460" alt="Last commit">
+  <img src="https://img.shields.io/github/license/vincenzosco/vimm-downloader?style=for-the-badge&color=2ecc71" alt="License">
+</p>
+
 Download multiple games from [vimm.net](https://vimm.net) at the same time, bypassing the 1-download-per-IP limit using automatic IP rotation.
 
 ## Features
@@ -20,7 +26,7 @@ Download multiple games from [vimm.net](https://vimm.net) at the same time, bypa
 
 1. Provide vault page URLs (e.g., `https://vimm.net/vault/9663`)
 2. The tool scrapes each page to find the direct download link (`download.php?mediaId=...`)
-3. Before each download, the IP address is rotated via Tor or a proxy pool
+3. Before each download, the proxy is rotated (each worker uses a different proxy)
 4. Downloads run concurrently -- each with a different IP
 
 Since vimm.net limits one download per IP address, using a different IP for each concurrent stream allows downloading several games at once.
@@ -42,7 +48,7 @@ The tool can fetch fresh SOCKS5 proxies from the [Proxifly free-proxy-list CDN](
 
 ```bash
 python -m vimm_bulk_downloader download \
-    --mode proxy --proxy-list default \
+    --proxy-list default \
     --url-file games.txt
 ```
 
@@ -50,7 +56,7 @@ Short form (``--proxy-list`` without a value defaults to ``default``):
 
 ```bash
 python -m vimm_bulk_downloader download \
-    --mode proxy --proxy-list \
+    --proxy-list \
     --url-file games.txt
 ```
 
@@ -62,7 +68,7 @@ Collect a list of HTTP or SOCKS proxies (one per line in a text file). Free prox
 
 ```bash
 python -m vimm_bulk_downloader download \
-    --mode proxy --proxy-file proxies.txt \
+    --proxy-file proxies.txt \
     --url-file games.txt
 ```
 
@@ -72,7 +78,7 @@ Pass a comma-separated list of proxy URLs directly:
 
 ```bash
 python -m vimm_bulk_downloader download \
-    --mode proxy --proxy-list "socks5://127.0.0.1:1080,http://proxy.example.com:8080" \
+    --proxy-list "socks5://127.0.0.1:1080,http://proxy.example.com:8080" \
     --url-file games.txt
 ```
 
