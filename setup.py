@@ -19,7 +19,6 @@ setup(
         "beautifulsoup4>=4.12.0",
         "rich>=13.0.0",
         "colorama>=0.4.6",
-        "stem>=1.8.0",
         "PySocks>=1.7.1",
     ],
     entry_points={

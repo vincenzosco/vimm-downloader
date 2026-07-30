@@ -1,9 +1,8 @@
 """
-ip_rotator.py - IP rotation strategies for bypassing per-IP download limits.
+ip_rotator.py - Proxy rotation strategy for bypassing per-IP download limits.
 
-Provides multiple backends:
-  1. TorRotator   – Uses the Tor network with Stem to rotate exit nodes.
-  2. ProxyRotator – Uses a user-supplied list of HTTP/SOCKS proxies.
+Provides:
+  ProxyRotator – Uses a list of HTTP/SOCKS proxies with round-robin rotation.
 """
 
 import os
@@ -26,14 +25,9 @@ from rich.progress import (
     TimeElapsedColumn,
 )
 
-from .tor_manager import TorManager
-
 _rich_console = Console()
 
 logger = logging.getLogger(__name__)
-
-# Suppress stem's noisy INFO-level socket-closed messages
-logging.getLogger("stem").setLevel(logging.WARNING)
 
 # ---------------------------------------------------------------------------
 # Proxifly free-proxy-list CDN URLs (updated every 5 minutes)
@@ -70,95 +64,6 @@ class IPRotator(ABC):
     @abstractmethod
     def name(self) -> str:
         """Human-readable backend name."""
-
-
-# ---------------------------------------------------------------------------
-# Tor backend
-# ---------------------------------------------------------------------------
-
-class TorRotator(IPRotator):
-    """Rotate IP address via the Tor network.
-
-    Requires:
-      - Tor daemon running with ControlPort enabled (default 9051)
-      - SOCKS5 proxy exposed (default port 9050)
-
-    On each rotate() call a NEWNYM signal is sent to Tor's control port,
-    building a new circuit and thus a different exit-node IP.
-    """
-
-    def __init__(
-        self,
-        socks_port: int = 9050,
-        control_port: int = 9051,
-        control_password: Optional[str] = None,
-        min_circuit_seconds: int = 10,
-    ):
-        self.socks_port = socks_port
-        self.control_port = control_port
-        self.control_password = control_password
-        self.min_circuit_seconds = min_circuit_seconds
-        self._last_rotate = 0.0
-
-    def name(self) -> str:
-        return f"Tor (SOCKS5 :{self.socks_port}, control :{self.control_port})"
-
-    def get_proxies(self) -> dict:
-        return {
-            "http": f"socks5h://127.0.0.1:{self.socks_port}",
-            "https": f"socks5h://127.0.0.1:{self.socks_port}",
-        }
-
-    def rotate(self) -> bool:
-        """Send NEWNYM signal to Tor control port."""
-        try:
-            from stem import Signal
-            from stem.control import Controller
-        except ImportError:
-            logger.error(
-                "stem library is required for Tor rotation. "
-                "Install it: pip install stem"
-            )
-            return False
-
-        # Respect Tor's minimum circuit lifetime
-        elapsed = time.time() - self._last_rotate
-        if elapsed < self.min_circuit_seconds:
-            wait = self.min_circuit_seconds - elapsed
-            logger.info(
-                "Waiting %.1f seconds before next Tor circuit change ...", wait
-            )
-            time.sleep(wait)
-
-        # Retry up to 2 times with auto-fix in between
-        for attempt in range(2):
-            try:
-                with Controller.from_port(port=self.control_port) as controller:
-                    if self.control_password:
-                        controller.authenticate(password=self.control_password)
-                    else:
-                        controller.authenticate()  # cookie auth
-                    controller.signal(Signal.NEWNYM)
-                    self._last_rotate = time.time()
-                    logger.info("Tor circuit renewed — new exit-node IP assigned.")
-                    return True
-            except Exception as exc:
-                err_msg = str(exc)
-                # Check if this is a cookie permission issue
-                if attempt == 0 and "Permission denied" in err_msg and "authcookie" in err_msg:
-                    logger.warning("Tor cookie not readable — attempting auto-fix...")
-                    try:
-                        from .tor_manager import fix_tor_cookie_auth
-                        if fix_tor_cookie_auth():
-                            logger.info("Cookie fixed, retrying rotation...")
-                            continue
-                    except Exception:
-                        pass
-                # Not a cookie issue, or fix failed — report once
-                logger.error("Tor NEWNYM failed: %s", exc)
-                return False
-
-        return False
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +161,7 @@ class ProxyRotator(IPRotator):
     get_proxies() returns the current proxy without advancing.
     Thread-safe for concurrent workers.
 
-    The first rotate() selects proxy[0]; subsequent calls advance to 1, 2, …
+    The first rotate() selects proxy[0]; subsequent calls advance to 1, 2, ...
     """
 
     def __init__(
@@ -355,96 +260,47 @@ class ProxyRotator(IPRotator):
 
 
 # ---------------------------------------------------------------------------
-# Factory / auto-detect
+# Factory
 # ---------------------------------------------------------------------------
 
-def detect_tor() -> bool:
-    """Check if a Tor SOCKS proxy is reachable on the default port."""
-    try:
-        resp = requests.get(
-            "https://check.torproject.org/",
-            proxies={
-                "http": "socks5h://127.0.0.1:9050",
-                "https": "socks5h://127.0.0.1:9050",
-            },
-            timeout=10,
-        )
-        return "Congratulations" in resp.text
-    except Exception:
-        return False
-
-
-def ensure_tor_running(
-    socks_port: int = 9050,
-    control_port: int = 9051,
-    interactive_install: bool = True,
-) -> bool:
-    """Convenience: install Tor if needed, start it, and wait until ready.
-
-    Returns True once Tor is running and accepting connections.
-    """
-    mgr = TorManager(
-        socks_port=socks_port,
-        control_port=control_port,
-    )
-    return mgr.ensure_running(interactive_install=interactive_install)
-
-
 def create_rotator(
-    mode: str = "tor",
     proxy_file: Optional[str] = None,
     proxy_list: Optional[list[str] | str] = None,
     proxy_check: bool = True,
-    tor_socks_port: int = 9050,
-    tor_control_port: int = 9051,
-    tor_password: Optional[str] = None,
 ) -> IPRotator:
     """Factory: create the appropriate IP rotator backend.
 
     Args:
-        mode: 'tor' or 'proxy'
-        proxy_file: Path to proxy list file (mode='proxy')
+        proxy_file: Path to proxy list file.
         proxy_list: Inline list of proxy strings, or "default" for Proxifly CDN.
-        proxy_check: If True, health-check proxies before use (proxy mode only).
-        tor_socks_port: Tor SOCKS5 port
-        tor_control_port: Tor control port
-        tor_password: Tor control password (optional)
+        proxy_check: If True, health-check proxies before use.
 
     Returns:
         An IPRotator instance.
     """
-    if mode == "tor":
-        return TorRotator(
-            socks_port=tor_socks_port,
-            control_port=tor_control_port,
-            control_password=tor_password,
-        )
-    elif mode == "proxy":
-        if isinstance(proxy_list, str) and proxy_list == "default":
-            # Fetch fresh proxies from the Proxifly free-proxy-list CDN
-            logger.info("Fetching fresh proxies from Proxifly free-proxy-list CDN ...")
-            try:
-                return ProxyRotator.from_url(PROXIFLY_URLS["socks5"], check=proxy_check)
-            except ValueError as e:
-                raise ValueError(
-                    f"Failed to fetch default proxy pool: {e}\n"
-                    "    Fall back to --proxy-file with a custom list."
-                ) from e
-        elif isinstance(proxy_list, list):
-            proxies = check_proxies(proxy_list) if proxy_check else proxy_list
-            if not proxies:
-                raise ValueError(
-                    "All provided proxies failed the health check — "
-                    "no working proxies available.\n"
-                    "    Try --no-proxy-check to skip health checking."
-                )
-            return ProxyRotator(proxy_list=proxies)
-        elif proxy_file:
-            return ProxyRotator.from_file(proxy_file, check=proxy_check)
-        else:
+    if isinstance(proxy_list, str) and proxy_list == "default":
+        # Fetch fresh proxies from the Proxifly free-proxy-list CDN
+        logger.info("Fetching fresh proxies from Proxifly free-proxy-list CDN ...")
+        try:
+            return ProxyRotator.from_url(PROXIFLY_URLS["socks5"], check=proxy_check)
+        except ValueError as e:
             raise ValueError(
-                "proxy mode requires --proxy-list default, "
-                "--proxy-file <file>, or --proxy-list <list>"
+                f"Failed to fetch default proxy pool: {e}\n"
+                "    Fall back to --proxy-file with a custom list."
+            ) from e
+    elif isinstance(proxy_list, list):
+        proxies = check_proxies(proxy_list) if proxy_check else proxy_list
+        if not proxies:
+            raise ValueError(
+                "All provided proxies failed the health check — "
+                "no working proxies available.\n"
+                "    Try --no-proxy-check to skip health checking."
             )
+        return ProxyRotator(proxy_list=proxies)
+    elif proxy_file:
+        return ProxyRotator.from_file(proxy_file, check=proxy_check)
     else:
-        raise ValueError(f"Unknown rotator mode: {mode}")
+        raise ValueError(
+            "proxy mode requires --proxy-list default, "
+            "--proxy-file <file>, or --proxy-list <list>"
+        )

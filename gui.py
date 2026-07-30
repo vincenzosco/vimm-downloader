@@ -4,7 +4,7 @@ gui.py - tkinter GUI for Vimm Bulk Downloader.
 Provides a tabbed interface:
   - Search: Search vimm.net, browse results, add to download queue
   - Downloads: Manage download queue with real-time progress bars
-  - Settings: Configure Tor/proxy, output directory, concurrent workers
+  - Settings: Configure proxy pool, output directory, concurrent workers
 
 Requires: Python 3.10+ (tkinter is built-in).
 """
@@ -36,14 +36,10 @@ from .vimm_scraper import (
 from .vimm_search import search_vimm
 from .ip_rotator import (
     create_rotator,
-    detect_tor,
-    ensure_tor_running,
     IPRotator,
-    TorRotator,
 )
-from .tor_manager import TorManager, stop_managed_tor, control_port_reachable, enable_control_port_and_fix_cookie
 from .console_list import CONSOLE_TABLE
-from .downloader import _format_size, _PART_SUFFIX, _get_part_path, _check_resume
+from .downloader import _format_size, _get_part_path, _check_resume
 
 logger = logging.getLogger(__name__)
 
@@ -76,9 +72,6 @@ PROGRESS_FILL = "#e94560"
 def load_config() -> dict:
     """Load saved settings from config file."""
     default = {
-        "mode": "tor",
-        "tor_socks_port": 9050,
-        "tor_control_port": 9051,
         "proxy_file": "",
         "proxy_use_default": False,
         "proxy_check": True,
@@ -377,7 +370,7 @@ class VimmBulkGUI:
         # Header
         header = ttk.Frame(main)
         header.pack(fill="x", pady=(0, 8))
-        ttk.Label(header, text=f"Vimm Bulk Downloader",
+        ttk.Label(header, text="Vimm Bulk Downloader",
                   font=("Segoe UI", 16, "bold"), foreground=ACCENT).pack(side="left")
         ttk.Label(header, text=f"v{__version__}",
                   font=("Segoe UI", 9), foreground=TEXT_SECONDARY).pack(side="left", padx=(6, 0))
@@ -407,10 +400,6 @@ class VimmBulkGUI:
         self.search_console_var = tk.StringVar(value="all")
         self.search_console_combo = ttk.Combobox(
             controls, textvariable=self.search_console_var, width=20, state="readonly")
-        console_names = [
-            f"{entry['Platform'].split(' (')[0]}"
-            for entry in CONSOLE_TABLE
-        ]
         self.search_console_combo["values"] = [
             f"{entry['Platform']}" for entry in CONSOLE_TABLE
         ]
@@ -770,59 +759,16 @@ class VimmBulkGUI:
 
         session.close()
 
-        # Phase 2: Ensure Tor is running if needed
-        ctrl_port = self.config["tor_control_port"]
-        if self.config["mode"] == "tor":
-            ok = ensure_tor_running(
-                socks_port=self.config["tor_socks_port"],
-                control_port=ctrl_port,
-                interactive_install=False,
-            )
-            if not ok:
-                def _on_tor_auto_fail():
-                    self.dl_status["text"] = "Tor failed to start. Check Settings tab."
-                    self.start_all_btn["state"] = "normal"
-                self.root.after(0, _on_tor_auto_fail)
-                return
-            # Check ControlPort and offer to enable it (on main thread)
-            if not control_port_reachable(ctrl_port):
-                def _prompt_enable():
-                    do_enable = messagebox.askyesno(
-                        "Enable ControlPort?",
-                        "Tor SOCKS is working but the ControlPort is not reachable.\n"
-                        "IP rotation requires the ControlPort to be enabled.\n\n"
-                        "Enable it now? (requires sudo password)",
-                    )
-                    if do_enable:
-                        def _enable_thread():
-                            ok = enable_control_port_and_fix_cookie(
-                                port=ctrl_port,
-                                socks_port=self.config["tor_socks_port"],
-                            )
-                            if ok:
-                                self.root.after(0, lambda: self.dl_status.__setitem__(
-                                    "text", "ControlPort enabled! Tor is ready."
-                                ))
-                            else:
-                                self.root.after(0, lambda: self.dl_status.__setitem__(
-                                    "text", "Could not enable ControlPort. Download will still work."
-                                ))
-                        threading.Thread(target=_enable_thread, daemon=True).start()
-                self.root.after(0, _prompt_enable)
-
-        # Phase 3: Download with IP rotation
+        # Phase 2: Download with IP rotation
         try:
             # Determine proxy list: "default" if checkbox is checked
             proxy_list_arg = "default" if self.config.get("proxy_use_default") else None
             proxy_file_arg = self.config.get("proxy_file") or None
 
             rotator = create_rotator(
-                mode=self.config["mode"],
                 proxy_file=proxy_file_arg,
                 proxy_list=proxy_list_arg,
                 proxy_check=self.config.get("proxy_check", True),
-                tor_socks_port=self.config["tor_socks_port"],
-                tor_control_port=self.config["tor_control_port"],
             )
         except (ValueError, FileNotFoundError) as e:
             for item in pending:
@@ -834,7 +780,6 @@ class VimmBulkGUI:
             self.root.after(0, self._on_downloads_complete)
             return
 
-        # Use the user-configured worker count (no limit for Tor mode)
         effective_workers = min(self.config["workers"], len(pending))
 
         with ThreadPoolExecutor(max_workers=effective_workers) as pool:
@@ -978,10 +923,10 @@ class VimmBulkGUI:
 
         except Exception as e:
             # Failsafe: if proxy download failed, retry with direct connection
-            if proxies and not isinstance(rotator, TorRotator):
+            if proxies:
                 _q(status_text="Proxy failed, retrying direct...")
                 logger.info(
-                    "Proxy download failed for %s — retrying with direct connection",
+                    "Proxy download failed for %s -- retrying with direct connection",
                     item['vault_url'],
                 )
                 actual_bytes = part_path.stat().st_size if part_path.exists() else 0
@@ -1132,47 +1077,15 @@ class VimmBulkGUI:
         tab = ttk.Frame(self.notebook, padding=12)
         self.notebook.add(tab, text="Settings")
 
-        # --- Mode ---
-        mode_frame = ttk.LabelFrame(tab, text="IP Rotation", padding=12)
-        mode_frame.pack(fill="x", pady=(0, 12))
-
-        self.mode_var = tk.StringVar(value=self.config.get("mode", "tor"))
-        ttk.Radiobutton(mode_frame, text="Tor (free, needs Tor daemon)",
-                         variable=self.mode_var, value="tor",
-                         command=self._toggle_mode).pack(anchor="w", pady=2)
-        ttk.Radiobutton(mode_frame, text="Proxy list",
-                         variable=self.mode_var, value="proxy",
-                         command=self._toggle_mode).pack(anchor="w", pady=2)
-
-        # Tor settings
-        self.tor_frame = ttk.Frame(mode_frame)
-        self.tor_frame.pack(fill="x", pady=(8, 0))
-
-        ttk.Label(self.tor_frame, text="SOCKS Port:",
-                  font=("Segoe UI", 9), foreground=TEXT_SECONDARY).grid(row=0, column=0, sticky="w")
-        self.tor_socks_var = tk.StringVar(value=str(self.config.get("tor_socks_port", 9050)))
-        ttk.Entry(self.tor_frame, textvariable=self.tor_socks_var,
-                  width=10).grid(row=0, column=1, padx=(4, 16), sticky="w")
-
-        ttk.Label(self.tor_frame, text="Control Port:",
-                  font=("Segoe UI", 9), foreground=TEXT_SECONDARY).grid(row=0, column=2, sticky="w")
-        self.tor_ctrl_var = tk.StringVar(value=str(self.config.get("tor_control_port", 9051)))
-        ttk.Entry(self.tor_frame, textvariable=self.tor_ctrl_var,
-                  width=10).grid(row=0, column=3, padx=(4, 0), sticky="w")
-
-        self.tor_check_btn = ttk.Button(self.tor_frame, text="Test Tor",
-                                         command=self._test_tor)
-        self.tor_check_btn.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
-
-        # Proxy settings
-        self.proxy_frame = ttk.Frame(mode_frame)
-        self.proxy_frame.pack(fill="x", pady=(8, 0))
+        # --- Proxy settings ---
+        proxy_frame = ttk.LabelFrame(tab, text="Proxy Pool", padding=12)
+        proxy_frame.pack(fill="x", pady=(0, 12))
 
         # Default proxy pool checkbox
         self.proxy_default_var = tk.BooleanVar(value=self.config.get("proxy_use_default", False))
         self.proxy_default_cb = ttk.Checkbutton(
-            self.proxy_frame,
-            text="Use default free proxy pool (Proxifly CDN — SOCKS5, updated every 5 min)",
+            proxy_frame,
+            text="Use default free proxy pool (Proxifly CDN -- SOCKS5, updated every 5 min)",
             variable=self.proxy_default_var,
             command=self._toggle_proxy_source,
         )
@@ -1181,13 +1094,13 @@ class VimmBulkGUI:
         # Health check checkbox
         self.proxy_check_var = tk.BooleanVar(value=self.config.get("proxy_check", True))
         self.proxy_check_cb = ttk.Checkbutton(
-            self.proxy_frame,
+            proxy_frame,
             text="Health-check proxies before use (slower startup, but filters dead ones)",
             variable=self.proxy_check_var,
         )
         self.proxy_check_cb.pack(anchor="w", pady=(0, 4))
 
-        proxy_file_row = ttk.Frame(self.proxy_frame)
+        proxy_file_row = ttk.Frame(proxy_frame)
         proxy_file_row.pack(fill="x")
 
         ttk.Label(proxy_file_row, text="Proxy file (optional):",
@@ -1228,7 +1141,7 @@ class VimmBulkGUI:
                                     textvariable=self.workers_var, width=8)
         workers_spin.pack(anchor="w", pady=(4, 0))
         ttk.Label(perf_frame,
-                  text="Enough proxies needed — each concurrent download needs a different IP.",
+                  text="Enough proxies needed -- each concurrent download needs a different IP.",
                   font=("Segoe UI", 8), foreground=TEXT_SECONDARY).pack(anchor="w", pady=(0, 0))
 
         # --- Buttons ---
@@ -1244,29 +1157,8 @@ class VimmBulkGUI:
                                           font=("Segoe UI", 9), foreground=TEXT_SECONDARY)
         self.settings_status.pack(anchor="w", pady=(8, 0))
 
-        # Apply initial visibility
-        self._toggle_mode()
-
-    def _toggle_mode(self):
-        """Show/hide Tor vs proxy settings based on mode."""
-        is_tor = self.mode_var.get() == "tor"
-        for w in self.tor_frame.winfo_children():
-            # Only widgets that support state: Entry, Button, Spinbox
-            if isinstance(w, (ttk.Entry, ttk.Button, ttk.Spinbox)):
-                try:
-                    w.configure(state="normal" if is_tor else "disabled")
-                except tk.TclError:
-                    pass
-        for w in self.proxy_frame.winfo_children():
-            if isinstance(w, (ttk.Entry, ttk.Button, ttk.Checkbutton)):
-                try:
-                    w.configure(state="disabled" if is_tor else "normal")
-                except tk.TclError:
-                    pass
-        self._toggle_proxy_source()
-
     def _toggle_proxy_source(self):
-        """Enable/disable proxy settings based on mode and default pool checkbox."""
+        """Enable/disable proxy file entry based on default pool checkbox."""
         use_default = self.proxy_default_var.get()
         state = "disabled" if use_default else "normal"
         try:
@@ -1290,76 +1182,9 @@ class VimmBulkGUI:
         if path:
             self.output_dir_var.set(path)
 
-    def _test_tor(self):
-        """Test Tor connectivity.  Auto-start / install if needed."""
-        self.tor_check_btn["state"] = "disabled"
-        self.tor_check_btn["text"] = "Setting up Tor..."
-        self.settings_status["text"] = "Checking Tor..."
-
-        def test():
-            socks_port = int(self.tor_socks_var.get())
-            ctrl_port = int(self.tor_ctrl_var.get())
-
-            if detect_tor():
-                # Check ControlPort and offer to enable it
-                if not control_port_reachable(ctrl_port):
-                    def _prompt_enable():
-                        do_enable = messagebox.askyesno(
-                            "Enable ControlPort?",
-                            "Tor SOCKS is working but the ControlPort is not reachable.\n"
-                            "IP rotation requires the ControlPort to be enabled.\n\n"
-                            "Enable it now? (requires sudo password)",
-                        )
-                        if do_enable:
-                            def _run_enable():
-                                ok = enable_control_port_and_fix_cookie(
-                                    port=ctrl_port,
-                                    socks_port=socks_port,
-                                )
-                                self.root.after(0, lambda: self._on_tor_test(ok))
-                            threading.Thread(target=_run_enable, daemon=True).start()
-                        else:
-                            self.root.after(0, lambda: self._on_tor_test(True))
-                    self.root.after(0, _prompt_enable)
-                    return
-                self.root.after(0, lambda: self._on_tor_test(True))
-                return
-
-            # Try to install & start Tor automatically
-            result = ensure_tor_running(
-                socks_port=socks_port,
-                control_port=ctrl_port,
-                interactive_install=False,
-            )
-            self.root.after(0, lambda: self._on_tor_test(result))
-
-        threading.Thread(target=test, daemon=True).start()
-
-    def _on_tor_test(self, success: bool):
-        self.tor_check_btn["state"] = "normal"
-        if success:
-            self.tor_check_btn["text"] = "Tor is working!"
-            self.settings_status["text"] = "Tor detected and working."
-            self.settings_status["foreground"] = SUCCESS
-        else:
-            self.tor_check_btn["text"] = "Tor not available"
-            self.settings_status["text"] = (
-                "Tor not reachable.  Install it manually:\n"
-                "  brew install tor"
-            )
-            self.settings_status["foreground"] = ERROR
-
-    def _on_tor_test_error(self, error: str):
-        self.tor_check_btn["state"] = "normal"
-        self.tor_check_btn["text"] = "Error"
-        self.settings_status["text"] = f"Tor test error: {error}"
-
     def _save_settings(self):
         """Save current settings to config file."""
         try:
-            self.config["mode"] = self.mode_var.get()
-            self.config["tor_socks_port"] = int(self.tor_socks_var.get())
-            self.config["tor_control_port"] = int(self.tor_ctrl_var.get())
             self.config["proxy_file"] = self.proxy_path_var.get()
             self.config["proxy_use_default"] = self.proxy_default_var.get()
             self.config["proxy_check"] = self.proxy_check_var.get()
@@ -1389,11 +1214,10 @@ class VimmBulkGUI:
     # =======================================================================
 
     def _on_close(self):
-        """Save window geometry, stop Tor if we started it, and exit."""
+        """Save window geometry and exit."""
         self._stop_flag = True
         # Wait briefly for downloads to stop
         time.sleep(0.3)
-        stop_managed_tor()
         try:
             self.config["window_geometry"] = self.root.geometry()
             save_config(self.config)

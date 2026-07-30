@@ -38,13 +38,11 @@ from .vimm_scraper import (
     extract_download_url,
     VimmScraperError,
 )
-from .ip_rotator import IPRotator, TorRotator
+from .ip_rotator import IPRotator
 
 colorama_init(autoreset=True)
 logger = logging.getLogger(__name__)
 
-# Max simultaneous workers = min(len(proxies), max_workers)
-# Tor mode: only 1 worker at a time (since NEWNYM is global)
 DEFAULT_MAX_WORKERS = 3
 DEFAULT_OUTPUT_DIR = "."
 
@@ -114,19 +112,19 @@ def _check_resume(session: requests.Session, url: str, part_path: str) -> int:
         existing = os.path.getsize(part_path)
 
         if "bytes" not in accept_ranges.lower():
-            logger.info("Server does not support Range requests — starting from scratch")
+            logger.info("Server does not support Range requests -- starting from scratch")
             os.remove(part_path)
             return 0
 
         if content_len and existing >= content_len:
             # Already fully downloaded (edge case)
-            logger.info("Partial file is already complete — finishing up")
+            logger.info("Partial file is already complete -- finishing up")
             return existing
 
         if content_len and existing > content_len:
-            # File changed on server (new one is smaller) — restart
+            # File changed on server (new one is smaller) -- restart
             logger.info(
-                "File changed on server (new size %d < existing %d) — restarting",
+                "File changed on server (new size %d < existing %d) -- restarting",
                 content_len, existing,
             )
             os.remove(part_path)
@@ -138,7 +136,7 @@ def _check_resume(session: requests.Session, url: str, part_path: str) -> int:
         )
         return existing
     except Exception as exc:
-        logger.warning("Resume check failed (%s) — starting from scratch", exc)
+        logger.warning("Resume check failed (%s) -- starting from scratch", exc)
         return 0
 
 
@@ -233,7 +231,7 @@ def _stream_download(
     try:
         headers = {}
         if resume_bytes > 0:
-            # Part of the file already exists — request remaining bytes
+            # Part of the file already exists -- request remaining bytes
             headers["Range"] = f"bytes={resume_bytes}-"
 
         resp = session.get(download_url, stream=True, timeout=60, headers=headers)
@@ -273,7 +271,7 @@ def _stream_download(
 
     except Exception as exc:
         logger.error("Stream download failed for %s: %s", download_url, exc)
-        # Only delete the file if we weren't resuming — keep partials for next time
+        # Only delete the file if we weren't resuming -- keep partials for next time
         if resume_bytes == 0 and os.path.isfile(output_path):
             os.remove(output_path)
         return (False, 0)
@@ -289,7 +287,7 @@ def _worker_task(
     progress: Progress,
     task_id: TaskID,
 ) -> DownloadResult:
-    """Run by a single worker thread — rotate IP, resolve filename, download.
+    """Run by a single worker thread -- rotate IP, resolve filename, download.
 
     Updates the Rich progress task throughout.
     """
@@ -298,13 +296,13 @@ def _worker_task(
     # --- Rotate IP before this download ---
     progress.update(task_id, description=f"(ROTATE) {job.short_name}")
     if not rotator.rotate():
-        # Warn but continue — the current proxy/IP still works
+        # Warn but continue -- the current proxy/IP still works
         progress.update(
             task_id,
-            description=f"[yellow]! {job.short_name} — rotation failed, continuing with current IP[/]",
+            description=f"[yellow]! {job.short_name} -- rotation failed, continuing with current IP[/]",
         )
         logger.warning(
-            "IP rotation failed for %s — continuing with current proxy",
+            "IP rotation failed for %s -- continuing with current proxy",
             job.vault_url,
         )
 
@@ -347,11 +345,11 @@ def _worker_task(
     )
 
     # --- Failsafe: if proxy download failed, retry with direct connection ---
-    if not success and not isinstance(rotator, TorRotator):
+    if not success and proxies:
         # Only one direct download at a time (vimm's 1-per-IP limit)
         actual_bytes = os.path.getsize(part_path) if os.path.isfile(part_path) else 0
         logger.info(
-            "Proxy download failed for %s — retrying with direct connection "
+            "Proxy download failed for %s -- retrying with direct connection "
             "(%d bytes on disk, waiting for direct-download slot)",
             job.short_name, actual_bytes,
         )
@@ -359,8 +357,8 @@ def _worker_task(
             task_id,
             description=f"[yellow](FALLBACK direct)[/] {job.short_name} [{_format_size(actual_bytes)} on disk]",
         )
-        direct_session = None
         _DIRECT_FALLBACK_LOCK.acquire()  # blocks until slot is free
+        direct_session = None
         try:
             # Create a session WITHOUT any proxy
             direct_session = requests.Session()
@@ -389,7 +387,7 @@ def _worker_task(
     elapsed = time.time() - start
 
     if success:
-        # Rename .part → final filename
+        # Rename .part to final filename
         try:
             os.rename(part_path, output_path)
         except OSError as exc:
@@ -403,7 +401,7 @@ def _worker_task(
     else:
         progress.update(
             task_id,
-            description=f"[red](ERR) {job.short_name} — download failed[/]",
+            description=f"[red](ERR) {job.short_name} -- download failed[/]",
         )
         # Keep the .part file on disk for future resume attempts
 
@@ -464,9 +462,9 @@ def download_all(
 
     Args:
         vault_urls: List of vault page URLs.
-        rotator: IPRotator backend (Tor / proxy pool).
+        rotator: IPRotator backend (proxy pool).
         output_dir: Where to save downloaded files.
-        max_workers: How many concurrent downloads (limited by available IPs).
+        max_workers: How many concurrent downloads.
         prefer_primary: Use download.vimm.net instead of download2.vimm.net.
 
     Returns:
@@ -523,15 +521,7 @@ def download_all(
     console.rule("[bold cyan]== Phase 2/2: Downloading with IP rotation[/]")
     console.print()
 
-    # Use the user-configured worker count (no limit for Tor mode)
     effective_workers = max_workers
-    if isinstance(rotator, TorRotator) and max_workers > 1:
-        console.print(
-            "[yellow]! Tor mode: IP rotation is shared across all workers[/]\n"
-            "    [dim]Each download will try to rotate Tor's exit node, but since"
-            " NEWNYM is global,[/]\n"
-            "    [dim]concurrent workers share the same Tor circuit.[/]"
-        )
 
     console.print(f"  [dim]Rotator:[/] {rotator.name()}")
     console.print(f"  [dim]Workers:[/] {effective_workers}")
@@ -571,7 +561,7 @@ def download_all(
             )
             task_ids.append(task_id)
 
-        # Submit workers — each picks up its task by index
+        # Submit workers -- each picks up its task by index
         with ThreadPoolExecutor(max_workers=effective_workers) as pool:
             futures = []
             for job, task_id in zip(jobs, task_ids):
@@ -608,7 +598,7 @@ def download_all(
         table.add_row(
             "[red]ERR[/]",
             r.vault_url,
-            "—",
+            "--",
             f"{r.elapsed_seconds:.1f}s",
         )
 

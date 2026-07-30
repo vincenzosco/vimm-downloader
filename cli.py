@@ -3,7 +3,7 @@ cli.py - Command-line interface for vimm-bulk-downloader.
 
 Usage examples:
 
-  # Download games (positional URLs — backward compatible):
+  # Download games (positional URLs -- backward compatible):
   python -m vimm_bulk_downloader https://vimm.net/vault/9663 https://vimm.net/vault/70794
 
   # Download via subcommand:
@@ -29,8 +29,7 @@ from colorama import Fore, Style, init as colorama_init
 
 from . import __version__
 from .downloader import download_all, DEFAULT_MAX_WORKERS, DEFAULT_OUTPUT_DIR
-from .ip_rotator import create_rotator, detect_tor, ensure_tor_running
-from .tor_manager import stop_managed_tor, control_port_reachable, enable_control_port_and_fix_cookie
+from .ip_rotator import create_rotator
 from .vimm_scraper import validate_vault_url
 from .console_list import CONSOLE_TABLE
 from .vimm_search import search_vimm, render_results
@@ -42,9 +41,8 @@ colorama_init(autoreset=True)
 # ---------------------------------------------------------------------------
 
 _DESCRIPTION = (
-    "Download multiple games from vimm.net concurrently, "
-    "bypassing the 1-download-per-IP limit using IP rotation "
-    "(Tor or proxy pool).  Also supports searching the vault."
+    "Download multiple games from vimm.net concurrently using a proxy pool "
+    "to bypass the 1-download-per-IP limit."
 )
 
 
@@ -58,17 +56,11 @@ def setup_logging(verbose: bool = False):
 
 
 def _add_shared_download_args(parser):
-    """Add --mode, --proxy-file, --proxy-list, --tor-*, --output, --workers, --no-primary."""
-    parser.add_argument(
-        "--mode", "-m",
-        choices=["tor", "proxy"],
-        default="tor",
-        help="IP rotation backend (default: tor)",
-    )
+    """Add --proxy-file, --proxy-list, --output, --workers, --no-primary, --no-proxy-check."""
     parser.add_argument(
         "--proxy-file", "-p",
         metavar="FILE",
-        help="Path to proxy list file (mode=proxy)",
+        help="Path to proxy list file (one proxy per line)",
     )
     parser.add_argument(
         "--proxy-list",
@@ -77,19 +69,7 @@ def _add_shared_download_args(parser):
         const="default",
         default=None,
         help="Proxy source: 'default' to fetch free proxies from Proxifly CDN, "
-             "or a comma-separated list of proxy URLs (mode=proxy)",
-    )
-    parser.add_argument(
-        "--tor-socks-port", type=int, default=9050,
-        help="Tor SOCKS5 proxy port (default: 9050)",
-    )
-    parser.add_argument(
-        "--tor-control-port", type=int, default=9051,
-        help="Tor control port (default: 9051)",
-    )
-    parser.add_argument(
-        "--tor-password", default=None,
-        help="Tor control password",
+             "or a comma-separated list of proxy URLs",
     )
     parser.add_argument(
         "--output", "-o",
@@ -114,13 +94,13 @@ def _add_shared_download_args(parser):
         action="store_true",
         dest="dry_run",
         default=False,
-        help="Fetch & check proxies / Tor, validate URLs, then exit without downloading",
+        help="Fetch & check proxies, validate URLs, then exit without downloading",
     )
     parser.add_argument(
         "--no-primary",
         action="store_true",
         dest="no_primary",
-        help="Don't rewrite download2.vimm.net → download.vimm.net",
+        help="Don't rewrite download2.vimm.net to download.vimm.net",
     )
 
 
@@ -138,13 +118,9 @@ def _ensure_rotator(args: dict):
             proxy_list = None
 
         rotator = create_rotator(
-            mode=args["mode"],
             proxy_file=args.get("proxy_file"),
             proxy_list=proxy_list,
             proxy_check=args.get("proxy_check", True),
-            tor_socks_port=args["tor_socks_port"],
-            tor_control_port=args["tor_control_port"],
-            tor_password=args.get("tor_password"),
         )
 
         if proxy_list_val == "default":
@@ -156,54 +132,6 @@ def _ensure_rotator(args: dict):
         print(f"{Fore.RED}Error: {e}{Style.RESET_ALL}")
         sys.exit(1)
     return rotator
-
-
-def _check_tor(args: dict):
-    """If mode=tor, auto-install and start Tor if needed."""
-    if args["mode"] != "tor":
-        return
-
-    ctrl_port = args.get("tor_control_port", 9051)
-
-    print(f"{Fore.CYAN}Checking Tor ...{Style.RESET_ALL}")
-    if detect_tor():
-        print(f"  {Fore.GREEN}OK Tor SOCKS proxy reachable{Style.RESET_ALL}")
-        # Warn if the control port is not accessible (rotation will fail)
-        if not control_port_reachable(ctrl_port):
-            print(
-                f"  {Fore.YELLOW}! ControlPort :{ctrl_port} not reachable —"
-                f" IP rotation will be skipped{Style.RESET_ALL}"
-            )
-            ans = input(
-                "    Enable ControlPort automatically?"
-                " (requires sudo) [Y/n]: "
-            ).strip().lower()
-            if ans != "n":
-                print(f"  {Fore.CYAN}Enabling ControlPort :{ctrl_port}...{Style.RESET_ALL}")
-                ok = enable_control_port_and_fix_cookie(port=ctrl_port, socks_port=args["tor_socks_port"])
-                if ok:
-                    print(f"  {Fore.GREEN}OK ControlPort enabled! Tor is ready.{Style.RESET_ALL}")
-                else:
-                    print(
-                        f"  {Fore.RED}ERR Could not enable ControlPort.{Style.RESET_ALL}\n"
-                        f"    Automatic download will still work.\n"
-                        f"    To enable manually: add 'ControlPort {ctrl_port}' to /etc/tor/torrc"
-                    )
-        return
-
-    print(f"  {Fore.YELLOW}Tor not running — attempting to start it ...{Style.RESET_ALL}")
-    ok = ensure_tor_running(
-        socks_port=args["tor_socks_port"],
-        control_port=ctrl_port,
-        interactive_install=True,
-    )
-    if ok:
-        print(f"  {Fore.GREEN}OK Tor is ready{Style.RESET_ALL}")
-    else:
-        print(f"  {Fore.RED}ERR Could not start Tor.  Check your setup.{Style.RESET_ALL}")
-        proceed = input("    Continue anyway? [Y/n]: ").strip().lower()
-        if proceed == "n":
-            sys.exit(1)
 
 
 def _print_banner():
@@ -264,25 +192,20 @@ def _run_download(args: dict):
     _print_banner()
     print(f"\n{Fore.WHITE}Games to download:{Style.RESET_ALL} {len(valid_urls)}")
 
-    try:
-        _check_tor(args)
-        rotator = _ensure_rotator(args)
-        print(f"  IP rotator: {rotator.name()}")
+    rotator = _ensure_rotator(args)
+    print(f"  IP rotator: {rotator.name()}")
 
-        if args.get("dry_run"):
-            _print_dry_run_summary(args, valid_urls, invalid_urls, rotator)
-            return
+    if args.get("dry_run"):
+        _print_dry_run_summary(args, valid_urls, invalid_urls, rotator)
+        return
 
-        download_all(
-            vault_urls=valid_urls,
-            rotator=rotator,
-            output_dir=args["output"],
-            max_workers=args["workers"],
-            prefer_primary=not args["no_primary"],
-        )
-    finally:
-        if not args.get("dry_run"):
-            stop_managed_tor()
+    download_all(
+        vault_urls=valid_urls,
+        rotator=rotator,
+        output_dir=args["output"],
+        max_workers=args["workers"],
+        prefer_primary=not args["no_primary"],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -297,14 +220,13 @@ def _print_dry_run_summary(args: dict, valid: list, invalid: list, rotator):
 
     console = Console()
     console.print()
-    console.rule("[bold yellow]== Dry Run — No files will be downloaded[/]")
+    console.rule("[bold yellow]== Dry Run -- No files will be downloaded[/]")
     console.print()
 
     table = Table(box=None, padding=(0, 2))
     table.add_column("Item", style="bold", no_wrap=True)
     table.add_column("Value")
 
-    table.add_row("Mode", f"[cyan]{args['mode']}[/]")
     table.add_row("Valid URLs", f"[green]{len(valid)}[/]")
     table.add_row("Invalid URLs", f"[red]{len(invalid)}[/]" if invalid else "[green]0[/]")
     table.add_row("IP rotator", f"[cyan]{rotator.name()}[/]")
@@ -318,15 +240,14 @@ def _print_dry_run_summary(args: dict, valid: list, invalid: list, rotator):
     table.add_row("Output directory", f"[yellow]{os.path.abspath(args['output'])}[/]")
     table.add_row("Workers", str(args["workers"]))
 
-    if args["mode"] == "proxy":
-        proxy_source = "Proxifly CDN (default)" if args.get("proxy_list") == "default" else (
-            args.get("proxy_file") or "inline list"
-        )
-        table.add_row("Proxy source", proxy_source)
-        table.add_row(
-            "Health check",
-            "[green]enabled[/]" if args.get("proxy_check", True) else "[yellow]disabled[/]",
-        )
+    proxy_source = "Proxifly CDN (default)" if args.get("proxy_list") == "default" else (
+        args.get("proxy_file") or "inline list"
+    )
+    table.add_row("Proxy source", proxy_source)
+    table.add_row(
+        "Health check",
+        "[green]enabled[/]" if args.get("proxy_check", True) else "[yellow]disabled[/]",
+    )
 
     if valid:
         console.print("[bold]Vault URLs:[/]")
@@ -450,7 +371,7 @@ def _do_search(args: list[str]):
     console = Console()
 
     print()
-    console.rule("[bold cyan]== Vimm\'s Lair — Search[/]")
+    console.rule("[bold cyan]== Vimm's Lair -- Search[/]")
     console.print(f"  Console: [white]{console_name}[/]")
     console.print(f"  Query:   [white]{query}[/]")
     console.print()
@@ -478,7 +399,7 @@ def _do_list_consoles():
     table.add_column("Code", style="cyan")
 
     for entry in CONSOLE_TABLE:
-        code_display = f'"{entry["Code"]}"' if entry["Code"] else "(empty — all consoles)"
+        code_display = f'"{entry["Code"]}"' if entry["Code"] else "(empty -- all consoles)"
         table.add_row(entry["Platform"], code_display)
 
     console.print(table)
