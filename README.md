@@ -14,7 +14,8 @@ Download multiple games from [vimm.net](https://vimm.net) at the same time, bypa
 - **IP rotation** -- rotates through a pool of HTTP/SOCKS proxies, each download using a different proxy
 - **Default free proxy pool** -- fetch fresh SOCKS5 proxies from the [Proxifly CDN](https://github.com/proxifly/free-proxy-list) (updated every 5 minutes) with `--proxy-list default`
 - **Proxy health-checking** -- each proxy is tested against a live endpoint before use; dead proxies are automatically removed (can be skipped with `--no-proxy-check`)
-- **Direct-connection failsafe** -- if a proxy disconnects mid-download, the tool automatically retries using your own IP (only 1 direct download at a time)
+- **Retry on failure** -- failed downloads are automatically retried up to 3 times, each time using a different proxy from the pool (configurable with `--retries`)
+- **Direct-connection failsafe** -- if a proxy disconnects mid-download, the tool attempts a direct connection using your own IP (only 1 direct download at a time)
 - **Download resume** -- interrupted downloads can resume where they left off via HTTP Range requests (.vimm_part files)
 - **Search** -- search the vault by console and query directly from the CLI
 - **GUI mode** -- desktop interface with search, download queue, format selector, and settings management
@@ -247,6 +248,8 @@ Download subcommand:
                            URLs. Use without a value for default.
   --no-proxy-check         Skip proxy health-checking (faster startup, may
                            use dead proxies)
+  -r, --retries N          Max retry attempts per failed download with a
+                           fresh proxy each time (default: 3)
   -o, --output DIR         Output directory (default: current directory)
   -w, --workers N          Max concurrent downloads (default: 3, max: 40)
   --no-primary             Don't rewrite download2.vimm.net to download.vimm.net
