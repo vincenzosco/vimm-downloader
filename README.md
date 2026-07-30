@@ -224,7 +224,7 @@ vimm-downloader gui
 The GUI provides three tabs:
 - **Search** -- search the vault, browse results, and add games to the download queue
 - **Downloads** -- manage the download queue with real-time progress bars and a format selector (auto/iso/wbfs/rvz/zip/7z) for the saved file extension
-- **Settings** -- configure proxy pool (default CDN, custom file, health-check), output directory, and concurrent workers (up to 40)
+- **Settings** -- configure proxy pool (default CDN, custom file, health-check), output directory, concurrent workers (up to 40), and max retries per failed download (1-10)
 
 ### Backward-compatible usage
 
