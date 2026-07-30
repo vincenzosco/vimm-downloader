@@ -51,10 +51,12 @@ PROXIFLY_URLS = {
 # Source: https://roundproxies.com
 # ---------------------------------------------------------------------------
 
-ROUNDPROXIES_URL = (
+ROUNDPROXIES_BASE_URL = (
     "https://roundproxies.com/api/get-free-proxies"
-    "?limit=100&page=1&sort_by=lastChecked&sort_type=desc"
+    "?limit=100&sort_by=lastChecked&sort_type=desc"
 )
+
+ROUNDPROXIES_PAGES = 3  # fetch pages 1..3 = up to 300 proxies from this source
 
 
 # ---------------------------------------------------------------------------
@@ -356,12 +358,13 @@ class ProxyRotator(IPRotator):
             logger.warning(msg)
             errors.append(msg)
 
-        # --- Fetch from RoundProxies API (JSON format) ---
-        try:
-            resp = requests.get(ROUNDPROXIES_URL, timeout=15)
+        # --- Fetch from RoundProxies API (JSON format, pages 1..PAGES) ---
+        def _parse_roundproxies_page(page_url: str) -> list[str]:
+            """Fetch a single RoundProxies page and return the proxy strings."""
+            resp = requests.get(page_url, timeout=15)
             resp.raise_for_status()
             data = resp.json()
-            round_count = 0
+            page_proxies: list[str] = []
             for entry in data.get("data", []):
                 ip = entry.get("ip", "")
                 port = entry.get("port", "")
@@ -369,13 +372,38 @@ class ProxyRotator(IPRotator):
                 if not ip or not port:
                     continue
                 proto = protocols[0] if protocols else "socks5"
-                combined.append(f"{proto}://{ip}:{port}")
-                round_count += 1
-            logger.info("Fetched %d proxies from RoundProxies", round_count)
-        except (requests.RequestException, ValueError) as e:
-            msg = f"RoundProxies: {e}"
-            logger.warning(msg)
-            errors.append(msg)
+                page_proxies.append(f"{proto}://{ip}:{port}")
+            return page_proxies
+
+        round_total = 0
+        round_urls = [
+            f"{ROUNDPROXIES_BASE_URL}&page={p}"
+            for p in range(1, ROUNDPROXIES_PAGES + 1)
+        ]
+        # Fetch pages concurrently for speed
+        with ThreadPoolExecutor(max_workers=ROUNDPROXIES_PAGES) as rp_pool:
+            rp_futures = {
+                rp_pool.submit(_parse_roundproxies_page, url): url
+                for url in round_urls
+            }
+            for rp_future in as_completed(rp_futures):
+                url = rp_futures[rp_future]
+                try:
+                    page_proxies = rp_future.result()
+                    combined.extend(page_proxies)
+                    round_total += len(page_proxies)
+                    logger.info(
+                        "Fetched %d proxies from %s", len(page_proxies), url
+                    )
+                except (requests.RequestException, ValueError) as e:
+                    msg = f"RoundProxies ({url.split('page=')[-1]}): {e}"
+                    logger.warning(msg)
+                    errors.append(msg)
+
+        logger.info(
+            "Fetched %d total proxies from RoundProxies (%d pages)",
+            round_total, ROUNDPROXIES_PAGES,
+        )
 
         if not combined:
             raise ValueError(
